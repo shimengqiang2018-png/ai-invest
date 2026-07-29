@@ -1,0 +1,330 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>RSRS v2.1 动量轮动策略 — 全维度审计报告</title>
+<script src="https://cdn.jsdelivr.net/npm/echarts@5.4.3/dist/echarts.min.js"></script>
+<style>
+:root { --bg: #0d1117; --card: #161b22; --border: #30363d; --text: #c9d1d9; --text2: #8b949e; --green: #3fb950; --red: #f85149; --yellow: #d2991d; --blue: #58a6ff; --purple: #bc8cff; --accent: #1f6feb; }
+* { margin:0; padding:0; box-sizing:border-box; }
+body { background:var(--bg); color:var(--text); font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",monospace; line-height:1.6; }
+.container { max-width:1100px; margin:0 auto; padding:24px; }
+h1 { font-size:28px; margin-bottom:4px; }
+h2 { font-size:20px; margin:32px 0 16px; padding-bottom:8px; border-bottom:1px solid var(--border); }
+h3 { font-size:16px; margin:20px 0 8px; color:var(--blue); }
+.subtitle { color:var(--text2); margin-bottom:24px; }
+.card { background:var(--card); border:1px solid var(--border); border-radius:8px; padding:20px; margin-bottom:16px; }
+.chart { width:100%; height:400px; }
+table { width:100%; border-collapse:collapse; margin:12px 0; }
+th,td { padding:8px 12px; text-align:left; border-bottom:1px solid var(--border); }
+th { color:var(--text2); font-weight:600; font-size:13px; }
+td { font-size:14px; }
+.pass { color:var(--green); }
+.fail { color:var(--red); }
+.warn { color:var(--yellow); }
+.info { color:var(--blue); }
+.tag { display:inline-block; padding:2px 8px; border-radius:12px; font-size:12px; font-weight:600; margin-right:6px; }
+.tag-ok { background:rgba(63,185,80,.15); color:var(--green); }
+.tag-warn { background:rgba(210,153,29,.15); color:var(--yellow); }
+.tag-fail { background:rgba(248,81,73,.15); color:var(--red); }
+.tag-info { background:rgba(88,166,255,.15); color:var(--blue); }
+.score { font-size:48px; font-weight:800; text-align:center; }
+.score-label { text-align:center; color:var(--text2); font-size:14px; }
+.grid2 { display:grid; grid-template-columns:1fr 1fr; gap:16px; }
+.grid3 { display:grid; grid-template-columns:1fr 1fr 1fr; gap:16px; }
+.mono { font-family:"SF Mono",monospace; font-size:13px; background:rgba(255,255,255,.04); padding:2px 6px; border-radius:4px; }
+.finding { padding:8px 12px; border-left:3px solid var(--yellow); background:rgba(210,153,29,.08); margin:8px 0; border-radius:0 4px 4px 0; }
+.finding-ok { border-left-color:var(--green); background:rgba(63,185,80,.08); }
+.finding-err { border-left-color:var(--red); background:rgba(248,81,73,.08); }
+.gap { color:var(--text2); }
+@media(max-width:768px){ .grid2,.grid3{grid-template-columns:1fr;} }
+</style>
+</head>
+<body>
+<div class="container">
+
+<h1>RSRS v2.1 动量轮动策略 — 全维度审计</h1>
+<p class="subtitle">审计日期: 2026-07-28 | 审计范围: 数据、脚本、策略逻辑、结论 | 审计方法: 逐项交叉验证 + 实际回测</p>
+
+<!-- Score Cards -->
+<div class="grid3">
+<div class="card" style="text-align:center;">
+  <div class="score-label">数据准确度</div>
+  <div class="score" style="color:var(--green)">100%</div>
+  <div class="score-label">12+ 关键指标全部可复现</div>
+</div>
+<div class="card" style="text-align:center;">
+  <div class="score-label">脚本正确度</div>
+  <div class="score" style="color:var(--yellow)">75%</div>
+  <div class="score-label">算法正确, 2处偏差, 1处方法缺陷</div>
+</div>
+<div class="card" style="text-align:center;">
+  <div class="score-label">策略逻辑</div>
+  <div class="score" style="color:var(--yellow)">70%</div>
+  <div class="score-label">框架合理, 3处可优化</div>
+</div>
+</div>
+
+<div class="grid3" style="margin-top:16px;">
+<div class="card" style="text-align:center;">
+  <div class="score-label">结论可靠性</div>
+  <div class="score" style="color:var(--yellow)">75%</div>
+  <div class="score-label">核心结论成立, 部分偏乐观</div>
+</div>
+<div class="card" style="text-align:center;">
+  <div class="score-label">文档-代码一致性</div>
+  <div class="score" style="color:var(--green)">98%</div>
+  <div class="score-label">仅1处微小不一致</div>
+</div>
+<div class="card" style="text-align:center;">
+  <div class="score-label">综合评分</div>
+  <div class="score" style="color:var(--yellow)">78/100</div>
+  <div class="score-label">合格但需注意已知偏差</div>
+</div>
+</div>
+
+<!-- Section 1: Data -->
+<h2>一、数据准确度审计 <span class="tag tag-ok">100% 复现</span></h2>
+
+<p>逐项交叉验证: 文档声称值 vs 实际回测输出 (4-ETF 池, 2018-05~2026-07, 8.24年)</p>
+
+<table>
+<tr><th style="width:80px;">类别</th><th>指标</th><th style="width:130px;">文档声称</th><th style="width:130px;">实际回测</th><th style="width:60px;">状态</th></tr>
+<tr><td rowspan="5" style="vertical-align:top;">收益</td><td>总收益率</td><td>+991.1%</td><td>+991.1%</td><td class="pass">✓</td></tr>
+<tr><td>年化收益</td><td>+33.7%</td><td>+33.7%</td><td class="pass">✓</td></tr>
+<tr><td>超额收益</td><td>+911.4%</td><td>+911.3%</td><td class="pass">✓</td></tr>
+<tr><td>胜率</td><td>63%</td><td>63%</td><td class="pass">✓</td></tr>
+<tr><td>交易次数</td><td>169次</td><td>169次</td><td class="pass">✓</td></tr>
+<tr><td rowspan="4" style="vertical-align:top;">B&H</td><td>黄金ETF</td><td>+216.8%</td><td>+216.8%</td><td class="pass">✓</td></tr>
+<tr><td>创业板ETF</td><td>+112.3%</td><td>+112.3%</td><td class="pass">✓</td></tr>
+<tr><td>纳指ETF</td><td>-5.1%</td><td>-5.1%</td><td class="pass">✓</td></tr>
+<tr><td>恒生ETF</td><td>-5.2%</td><td>-5.2%</td><td class="pass">✓</td></tr>
+<tr><td rowspan="4" style="vertical-align:top;">ETF贡献</td><td>创业板: +¥438,950 (21次,67%)</td><td class="mono">+438,950</td><td class="mono">+438,950</td><td class="pass">✓</td></tr>
+<tr><td>纳指: +¥314,403 (26次,65%)</td><td class="mono">+314,403</td><td class="mono">+314,403</td><td class="pass">✓</td></tr>
+<tr><td>黄金: +¥239,199 (26次,62%)</td><td class="mono">+239,199</td><td class="mono">+239,199</td><td class="pass">✓</td></tr>
+<tr><td>恒生: -¥19,042 (11次,55%)</td><td class="mono">-19,042</td><td class="mono">-19,042</td><td class="pass">✓</td></tr>
+</table>
+
+<div class="card" style="margin-top:16px;">
+<h3>滚动窗口验证 — 25/25 窗口全部可复现</h3>
+<table>
+<tr><th>指标</th><th>文档声称</th><th>实际输出</th><th>状态</th></tr>
+<tr><td>正收益窗口</td><td>21/25 (84%)</td><td>21/25</td><td class="pass">✓</td></tr>
+<tr><td>正超额窗口</td><td>21/25 (84%)</td><td>21/25</td><td class="pass">✓</td></tr>
+<tr><td>平均超额</td><td>+63.7%</td><td>+63.7%</td><td class="pass">✓</td></tr>
+<tr><td>最差窗口</td><td>-64.3% (2020-11~2021-11)</td><td>-64.3%</td><td class="pass">✓</td></tr>
+<tr><td>近似Sharpe</td><td>1.11</td><td>1.11</td><td class="pass">✓</td></tr>
+</table>
+<p style="margin-top:8px;" class="gap">4个负超额窗口的数据也100%匹配: -52.1%, -54.0%, -55.4%, -64.3%</p>
+</div>
+
+<div class="card" style="margin-top:16px;">
+<h3>日频风险指标 & IC/IR 验证</h3>
+<table>
+<tr><th>指标</th><th>文档声称</th><th>strategy_audit.py</th><th>状态</th></tr>
+<tr><td>日频年化波动</td><td>20.1%</td><td>20.1%</td><td class="pass">✓</td></tr>
+<tr><td>日频MaxDD</td><td>16.9%</td><td>16.9%</td><td class="pass">✓</td></tr>
+<tr><td>日频Sharpe</td><td>1.49</td><td>1.49</td><td class="pass">✓</td></tr>
+<tr><td>Sortino</td><td>1.43</td><td>1.43</td><td class="pass">✓</td></tr>
+<tr><td>Calmar</td><td>2.10</td><td>2.10</td><td class="pass">✓</td></tr>
+<tr><td>VaR 95%</td><td>-1.74%</td><td>-1.74%</td><td class="pass">✓</td></tr>
+<tr><td>CVaR 95%</td><td>-2.80%</td><td>-2.80%</td><td class="pass">✓</td></tr>
+<tr><td>偏度</td><td>-0.03</td><td>-0.030</td><td class="pass">✓</td></tr>
+<tr><td>超额峰度</td><td>4.88</td><td>4.88</td><td class="pass">✓</td></tr>
+<tr><td>IC(10日)</td><td>0.074</td><td>0.0743</td><td class="pass">✓</td></tr>
+<tr><td>IC(20日)</td><td>0.028</td><td>0.0282</td><td class="pass">✓</td></tr>
+<tr><td>IC(40日)</td><td>-0.030</td><td>-0.0299</td><td class="pass">✓</td></tr>
+</table>
+</div>
+
+<div class="finding finding-ok">
+<strong>数据审计结论:</strong> 文档中所有关键指标 (收益、风险、因子、压力测试) 均与脚本实际输出 100% 一致。不存在捏造或修饰数据的情况。Rolling window 的 25 个窗口完全可复现，日频指标和 IC/IR 精确匹配。
+</div>
+
+<!-- Section 2: Scripts -->
+<h2>二、脚本正确度审计 <span class="tag tag-warn">75%</span></h2>
+
+<div class="card">
+<h3>2.1 算法实现: RSRS 计算 <span class="tag tag-ok">正确</span></h3>
+<p>加权最小二乘回归 (log价格, 线性递增权重1→2) → 年化斜率×252 → R²计算 → clamp(score, 0, 50)</p>
+<p>两个脚本 (<span class="mono">momentum_etf_backtest.py:266-317</span> 和 <span class="mono">momentum_signal.py:113-165</span>) 实现了相同算法，数值验证通过。</p>
+</div>
+
+<div class="card">
+<h3>2.2 过滤条件 — 回测引擎 vs 信号扫描器 <span class="tag tag-fail">不一致</span></h3>
+<table>
+<tr><th style="width:300px;">momentum_etf_backtest.py (回测)</th><th style="width:300px;">momentum_signal.py (实盘)</th></tr>
+<tr><td>✅ RSRS > 0</td><td>✅ RSRS > 0</td></tr>
+<tr><td>✅ Close > MA20</td><td>✅ Close > MA20</td></tr>
+<tr><td>✅ Vol ≤ median × 1.5</td><td>✅ Vol ≤ median × 1.5</td></tr>
+<tr><td>❌ 无成交量过滤</td><td>✅ <strong>成交量异动过滤 (surge > 2.5x)</strong></td></tr>
+<tr><td>❌ 无 RSI 过滤</td><td>✅ <strong>RSI > 80 归零</strong></td></tr>
+<tr><td>❌ 无双均线判定</td><td>✅ <strong>MA20 > MA60 加分</strong></td></tr>
+</table>
+<div class="finding finding-err">
+<strong>P0 发现:</strong> 实盘信号扫描器 (signal.py) 比回测引擎 (backtest.py) 多了 2 个关键过滤器 (成交量异动 + RSI超买)。这意味着回测结果<strong>系统性高估了真实交易表现</strong>——有信号但被量价异动过滤掉的机会在回测中被错误地执行了交易。
+</div>
+</div>
+
+<div class="card">
+<h3>2.3 信号-执行时间偏差 <span class="tag tag-warn">已披露</span></h3>
+<p>回测在检查日收盘价同时生成信号和执行交易 (line 567-619)。注释说明为"简化处理"。双周频率下偏差有限，但在剧烈波动日可能产生单日 0.5-2% 差异。</p>
+</div>
+
+<div class="card">
+<h3>2.4 IC/IR 计算方法缺陷 <span class="tag tag-fail">P1</span></h3>
+<p><span class="mono">strategy_audit.py:213</span> 行: <code class="mono">if rsrs <= 0: continue</code> — IC 计算仅包含 RSRS > 0 的样本点，过滤掉了"无趋势"时段。</p>
+<p><strong>影响:</strong> 报告中的 IC=0.074 仅衡量"当 RSRS 发出正向信号时"的预测力。真实的<strong>无条件</strong> IC 可能更接近于零，因为在 RSRS ≤ 0 的点上，趋势因子对预测没有帮助。这解释了为何回测中"无信号"阶段策略表现不佳。</p>
+</div>
+
+<div class="card">
+<h3>2.5 交易成本建模 <span class="tag tag-warn">缺失</span></h3>
+<p>回测引擎完全不考虑佣金 (万2.5) 和滑点。169笔交易 × 万2.5 × 2次 ≈ 仅 0.085% 佣金成本，可忽略。但滑点 (0.02-0.05%/笔) 的累积影响约在年化 -0.3~0.8pp。</p>
+</div>
+
+<div class="finding finding-err">
+<strong>脚本审计结论:</strong> 核心算法正确，但存在 2 个 P0 问题：<strong>(1) 回测引擎与实盘扫描器过滤器不一致</strong>，导致回测高估真实收益；<strong>(2) IC/IR 仅衡量正向信号区间</strong>，报告的无条件 IC 可能更低。1 个 P1 问题：无交易成本建模 (影响较小)。
+</div>
+
+<!-- Section 3: Strategy Logic -->
+<h2>三、策略逻辑审计 <span class="tag tag-warn">70%</span></h2>
+
+<div class="card">
+<h3>3.1 因子设计 <span class="tag tag-ok">合理</span></h3>
+<p><strong>RSRS = 年化斜率 × R²</strong> = 趋势强度 × 趋势质量。这个设计有明确的经济含义：斜率大+R²高的标的是"稳健上涨"的优质趋势。比简单动量 (N日涨幅) 多了"趋势质量"维度，理论上有增量信息。</p>
+<p><strong>局限:</strong> RSRS 在 20 日窗口的预测力极弱 (IC=0.028)，仅在 10 日有微弱预测力 (IC=0.074)。这意味着该因子实质上是超短周期的，与策略的双周调仓频率之间存在张力。</p>
+</div>
+
+<div class="card">
+<h3>3.2 三条件过滤 <span class="tag tag-ok">逻辑自洽</span></h3>
+<ul>
+  <li>RSRS > 0 — 确认趋势方向向上</li>
+  <li>Close > MA20 — 确认价格在趋势线上</li>
+  <li>Vol ≤ median × 1.5 — 排除异常波动 (防追顶)</li>
+</ul>
+<p><strong>三个条件都使用 20 日窗口，缺乏信号来源的多样性。</strong> 行业最佳实践建议使用不同周期的滤网 (如趋势=50日, 波动率=20日, 成交量=5日)。</p>
+</div>
+
+<div class="card">
+<h3>3.3 Pool Selection (池子选择) <span class="tag tag-warn">数据挖掘风险</span></h3>
+<p>当前 4-ETF 池 (黄金+纳指+创业板+恒生) 是从 <strong>1,164 个组合</strong>中以 Sharpe 排序选出。虽然经过了 25 窗口 walk-forward 验证 (84% 正超额)，但:</p>
+<ul>
+  <li>池子本身是 retrospectively chosen (事后选择的)</li>
+  <li>Walk-forward 验证的是"给定池子的稳定性"，而非"池子选择过程的稳健性"</li>
+  <li>其他池子在 walk-forward 中可能表现更好或更差——这一点未被验证</li>
+</ul>
+</div>
+
+<div class="card">
+<h3>3.4 仓位管理 <span class="tag tag-warn">单资产集中</span></h3>
+<p>策略始终将 100% 资金投入排名第一的 ETF，无风险预算或波动率目标。这使策略暴露于:</p>
+<ul>
+  <li>单资产特异性风险 (如恒生 ETF 被选中时贡献为负)</li>
+  <li>全或无的特质 — 要么满仓一个, 要么空仓</li>
+  <li>4 个连续负窗口 (2020-2021) 就是这种极端集中风险的体现</li>
+</ul>
+</div>
+
+<div class="card">
+<h3>3.5 双策略交互 <span class="tag tag-info">设计合理</span></h3>
+<p>网格 + 动量双策略的资金隔离设计是正确的。但 <strong>创业板同时出现在两个池子中</strong>，存在潜在的交叉污染。文档已说明"各自记账不混淆"，在实际操作中需要严格的纪律执行。</p>
+</div>
+
+<div class="finding finding-err">
+<strong>策略逻辑核心问题:</strong> 
+(1) 三个过滤器使用相同窗口 (20日)，信号源单一；
+(2) 100% 单资产仓位在 2020-2021 年连续 4 个窗口负超额 (共亏损 -226% 对基准)；
+(3) 池子选择过程存在数据挖掘，walk-forward 不能完全消除。
+</div>
+
+<!-- Section 4: Conclusions -->
+<h2>四、结论可靠性审计 <span class="tag tag-warn">75%</span></h2>
+
+<div class="card">
+<h3>4.1 诚实修正部分 — 评估</h3>
+<table>
+<tr><th>文档修正声明</th><th>审计评估</th></tr>
+<tr><td>"双周采样虚高 Sharpe... v2.1 真实 Sharpe ≈ 1.2-1.3"</td><td class="warn">偏保守。日频 Sharpe 实测 = 1.49，高于估计值。</td></tr>
+<tr><td>"无交易成本建模... 年化 -0.5~0.8pp"</td><td class="pass">合理估算，影响较小。</td></tr>
+<tr><td>"信号-执行无时滞... 双周频率下影响较小"</td><td class="pass">正确评估。</td></tr>
+<tr><td>"选池数据挖掘风险... 滚动窗口 84% 正超额是防御"</td><td class="pass">诚实承认，但 84% 并不等于完全消除。</td></tr>
+<tr><td>"cap=50 稳定性代价... 承担了更多尾部风险"</td><td class="pass">准确描述了 trade-off。</td></tr>
+<tr><td>"真实预期年化 22-25%，MaxDD 按 17% 规划"</td><td class="warn">日频MaxDD=16.9%已确认，但年化 22-25% 仍偏乐观。扣掉 0.5pp 成本 + 信号过滤器差异 ≈ 20-23% 可能更现实。</td></tr>
+</table>
+</div>
+
+<div class="card">
+<h3>4.2 "一句话总结" 逐句验证 (Line 519-532)</h3>
+<table>
+<tr><th>声明</th><th>验证</th><th>状态</th></tr>
+<tr><td>"回测 8.24 年全周期 +991.1%"</td><td>实际: +991.1%</td><td class="pass">✓</td></tr>
+<tr><td>"年化 +33.7%"</td><td>实际: +33.7%</td><td class="pass">✓</td></tr>
+<tr><td>"胜率 63%"</td><td>实际: 63%</td><td class="pass">✓</td></tr>
+<tr><td>"21/25 正超额 (84%)"</td><td>实际: 21/25</td><td class="pass">✓</td></tr>
+<tr><td>"日频 MaxDD = 16.9%"</td><td>实际: 16.9%</td><td class="pass">✓</td></tr>
+<tr><td>"日频 Sharpe = 1.49"</td><td>实际: 1.49</td><td class="pass">✓</td></tr>
+<tr><td>"RSRS IC=0.074 (10日) / 0.028 (20日)"</td><td>实际: 0.0743 / 0.0282</td><td class="pass">✓</td></tr>
+<tr><td>"纳指跌 85% 期间策略 +10%"</td><td>实际: +10.1%</td><td class="pass">✓</td></tr>
+</table>
+</div>
+
+<div class="card">
+<h3>4.3 当前信号 (Line 356-360) 验证</h3>
+<p class="mono">momentum_signal.py --pool 518880,513100,159915,159920 实际输出:</p>
+<ul>
+  <li>恒生ETF RSRS=50.00 ✓ (文档: RSRS=50)</li>
+  <li>斜率 +128.2% × R² 0.868 ✓ (文档完全匹配)</li>
+  <li>黄金/纳指/创业板 RSRS 均为 0 ✓ (文档确认)</li>
+  <li>恒生信号等级: medium ✓ (文档: 中等信号)</li>
+</ul>
+</div>
+
+<div class="finding finding-err" style="margin-top:16px;">
+<strong>结论可靠性核心发现:</strong> 文档的"诚实修正"努力值得肯定 —— 主动下调了回测数字并披露了偏差来源。但有两处仍偏乐观：(1) 年化收益预期 22-25% 可能需再下调 2-3pp 以反映实盘扫描器的额外过滤器；(2) 未提及回测引擎与信号扫描器的不一致，这是实盘交易者最重要的认知差距。
+</div>
+
+<!-- Summary -->
+<h2>五、审计总结与建议</h2>
+
+<div class="grid2">
+<div class="card">
+<h3 style="margin-top:0;">🟢 做得好的 (5项)</h3>
+<ol style="padding-left:20px;">
+  <li>数据完全可复现 — 12+ 指标 100% 匹配</li>
+  <li>RSRS 算法在两个脚本中实现一致</li>
+  <li>Walk-forward 25 窗口验证结构完整</li>
+  <li>补充了日频指标, VaR/CVaR, IC/IR 等专业指标</li>
+  <li>"诚实修正"章节直面偏差,态度坦诚</li>
+</ol>
+</div>
+<div class="card">
+<h3 style="margin-top:0;">🔴 需要修复 (3项)</h3>
+<ol style="padding-left:20px;">
+  <li><strong>P0: 回测引擎与实盘扫描器过滤器不一致</strong> — 在 backtest.py 中加入成交量 + RSI 过滤器，或从 signal.py 中移除</li>
+  <li><strong>P0: IC/IR 仅计算 RSRS>0 区间</strong> — 修改 strategy_audit.py 包含全样本 IC 作为补充指标</li>
+  <li><strong>P1: 三过滤器共用同一窗口 (20日)</strong> — 考虑差异化周期以提高信号鲁棒性</li>
+</ol>
+</div>
+</div>
+
+<div class="grid2" style="margin-top:16px;">
+<div class="card">
+<h3 style="margin-top:0;">🟡 建议改进 (3项)</h3>
+<ol style="padding-left:20px;">
+  <li>加入风险预算机制,避免 100% 单资产暴露</li>
+  <li>对池子选择做随机组合 walk-forward 以量化数据挖掘偏差</li>
+  <li>回测中加入滑点建模 (bid-ask spread ≈ 0.02-0.05%)</li>
+</ol>
+</div>
+<div class="card">
+<h3 style="margin-top:0;">📐 最终评分</h3>
+<div class="score" style="color:var(--yellow);">78/100</div>
+<div class="score-label">数据: 100 | 脚本: 75 | 策略逻辑: 70 | 结论: 75</div>
+<p style="margin-top:12px; color:var(--text2);">这是一个<strong>诚实且可复现</strong>的策略。数据质量无可挑剔，代码逻辑正确但存在已知偏差。最大弱点是回测引擎与实盘扫描器的不一致，这意味着实盘表现<strong>系统性低于回测</strong>。修复此问题后，策略评级可提升至 85+。</p>
+</div>
+</div>
+
+</div>
+</body>
+</html>

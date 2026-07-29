@@ -1,0 +1,42 @@
+{
+  "date": "2026-07-29T21:45:00+08:00",
+  "source": "东方财富持仓截图（三图交叉校验）",
+  "account_summary": {
+    "total_assets": 42906.54,
+    "securities_value": 36701.20,
+    "available_cash": 6205.34,
+    "withdrawable_cash": 6205.34,
+    "position_ratio": 85.54,
+    "daily_pnl": 543.74,
+    "total_pnl": 906.35
+  },
+  "holdings": [
+    {"code": "159915", "name": "创业板", "shares": 800, "available": 800, "price": 3.402, "cost": 3.376, "market_value": 2721.60, "pnl": 20.90, "pnl_pct": 0.770, "daily_pnl": 37.60, "daily_pnl_pct": 1.401, "strategy": "grid_observe"},
+    {"code": "159920", "name": "恒生ETF", "shares": 3200, "available": 3200, "price": 1.527, "cost": 1.409, "market_value": 4886.40, "pnl": 379.08, "pnl_pct": 8.375, "daily_pnl": 99.20, "daily_pnl_pct": 2.072, "strategy": "momentum"},
+    {"code": "510300", "name": "300ETF", "shares": 400, "available": 400, "price": 4.657, "cost": 4.537, "market_value": 1862.80, "pnl": 47.97, "pnl_pct": 2.645, "daily_pnl": 12.00, "daily_pnl_pct": 0.648, "strategy": "base"},
+    {"code": "511880", "name": "银华日利", "shares": 100, "available": 100, "price": 100.658, "cost": 100.661, "market_value": 10065.80, "pnl": -0.30, "pnl_pct": -0.003, "daily_pnl": -0.30, "daily_pnl_pct": -0.003, "strategy": "momentum_cash"},
+    {"code": "512010", "name": "医药ETF", "shares": 5000, "available": 5000, "price": 0.373, "cost": 0.371, "market_value": 1865.00, "pnl": 9.54, "pnl_pct": 0.539, "daily_pnl": 35.00, "daily_pnl_pct": 1.913, "strategy": "sell_only"},
+    {"code": "512690", "name": "酒ETF", "shares": 4300, "available": 4300, "price": 0.436, "cost": 0.418, "market_value": 1874.80, "pnl": 76.59, "pnl_pct": 4.306, "daily_pnl": 27.12, "daily_pnl_pct": 1.261, "strategy": "sell_only"},
+    {"code": "512880", "name": "证券ETF", "shares": 6800, "available": 6800, "price": 1.106, "cost": 1.112, "market_value": 7520.80, "pnl": -41.39, "pnl_pct": -0.540, "daily_pnl": 142.80, "daily_pnl_pct": 1.936, "strategy": "grid_core"},
+    {"code": "513180", "name": "恒指科技", "shares": 9600, "available": 9600, "price": 0.615, "cost": 0.572, "market_value": 5904.00, "pnl": 413.96, "pnl_pct": 7.518, "daily_pnl": 190.32, "daily_pnl_pct": 3.162, "strategy": "reduced"}
+  ],
+  "strategy_allocation": {
+    "grid_core": {"etfs": ["512880"], "market_value": 7520.80, "pct": 17.53},
+    "grid_observe": {"etfs": ["159915"], "market_value": 2721.60, "pct": 6.34},
+    "momentum_or_base": {"etfs": ["159920", "510300"], "market_value": 6749.20, "pct": 15.73},
+    "momentum_cash": {"etfs": ["511880"], "market_value": 10065.80, "pct": 23.46},
+    "reduced": {"etfs": ["513180"], "market_value": 5904.00, "pct": 13.76},
+    "to_clean": {"etfs": ["512690", "512010"], "market_value": 3739.80, "pct": 8.72},
+    "cash": {"market_value": 6205.34, "pct": 14.46}
+  },
+  "changes_from_20260728": {
+    "511880_position": "+100 shares",
+    "513180_reduced": "-500 shares (10,100→9,600)",
+    "512690_reduced": "-700 shares (5,000→4,300)",
+    "unchanged_shares": ["159915", "159920", "510300", "512010", "512880"]
+  },
+  "notes": [
+    "截图未展示成交价格和手续费，因此不推断回收金额。",
+    "截图无法证明现金在网格与动量子账户之间的内部归属。"
+  ]
+}

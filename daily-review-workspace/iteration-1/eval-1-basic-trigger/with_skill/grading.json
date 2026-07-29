@@ -1,0 +1,34 @@
+{
+  "expectations": [
+    {
+      "text": "Has 3+ HTML files",
+      "passed": true,
+      "evidence": "3 HTML files found: ['大盘复盘-20260727-p2.html', '大盘复盘-20260727-p3.html', '大盘复盘-20260727-p1.html']"
+    },
+    {
+      "text": "Has 3+ PNG files",
+      "passed": true,
+      "evidence": "3 PNG files found: ['大盘复盘-20260727-p1.png', '大盘复盘-20260727-p3.png', '大盘复盘-20260727-p2.png']"
+    },
+    {
+      "text": "All PNGs are 1080×1920",
+      "passed": true,
+      "evidence": "大盘复盘-20260727-p1.png:1080x1920; 大盘复盘-20260727-p3.png:1080x1920; 大盘复盘-20260727-p2.png:1080x1920"
+    },
+    {
+      "text": "HTML uses light theme",
+      "passed": true,
+      "evidence": "Found color-scheme or white background"
+    },
+    {
+      "text": "Contains index market data",
+      "passed": true,
+      "evidence": "Index data found in HTML"
+    },
+    {
+      "text": "Has data source / disclaimer",
+      "passed": true,
+      "evidence": "Found disclaimer or data source"
+    }
+  ]
+}

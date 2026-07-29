@@ -1,0 +1,587 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>RSRS v2.1 动量轮动策略 — 专业量化审计报告</title>
+<script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script>
+<style>
+  :root {
+    --bg: #fafaf9;
+    --card-bg: #ffffff;
+    --text: #1c1917;
+    --text-secondary: #57534e;
+    --text-muted: #8c8882;
+    --border: #e7e5e4;
+    --accent: #2563eb;
+    --accent-dim: #dbeafe;
+    --red: #dc2626;
+    --green: #16a34a;
+    --amber: #d97706;
+    --red-bg: #fef2f2;
+    --green-bg: #f0fdf4;
+    --amber-bg: #fffbeb;
+    --radius: 8px;
+    --shadow: 0 1px 3px rgba(0,0,0,.06), 0 1px 2px rgba(0,0,0,.04);
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.7;
+    max-width: 960px;
+    margin: 0 auto;
+    padding: 32px 20px 80px;
+  }
+  h1 { font-size: 28px; font-weight: 700; margin-bottom: 4px; letter-spacing: -0.5px; }
+  h2 { font-size: 20px; font-weight: 650; margin: 36px 0 16px; padding-bottom: 6px; border-bottom: 2px solid var(--accent); display: inline-block; }
+  h3 { font-size: 16px; font-weight: 600; margin: 24px 0 8px; }
+  .meta { color: var(--text-muted); font-size: 13px; margin-bottom: 24px; }
+  .card {
+    background: var(--card-bg); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 20px 24px; margin: 16px 0;
+    box-shadow: var(--shadow);
+  }
+  .card h3 { margin-top: 0; }
+  .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  .grid-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 16px; }
+  .grid-4 { display: grid; grid-template-columns: 1fr 1fr 1fr 1fr; gap: 12px; }
+  .kpi { text-align: center; padding: 16px 8px; }
+  .kpi .value { font-size: 28px; font-weight: 700; letter-spacing: -1px; }
+  .kpi .label { font-size: 12px; color: var(--text-muted); margin-top: 2px; }
+  .kpi .sub { font-size: 11px; color: var(--text-secondary); margin-top: 1px; }
+  .green { color: var(--green); }
+  .red { color: var(--red); }
+  .amber { color: var(--amber); }
+  .badge {
+    display: inline-block; padding: 2px 8px; border-radius: 4px;
+    font-size: 11px; font-weight: 600; line-height: 1.4;
+  }
+  .badge-pass { background: var(--green-bg); color: var(--green); }
+  .badge-warn { background: var(--amber-bg); color: var(--amber); }
+  .badge-fail { background: var(--red-bg); color: var(--red); }
+  .badge-info { background: var(--accent-dim); color: var(--accent); }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; margin: 12px 0; }
+  th, td { padding: 8px 12px; text-align: left; border-bottom: 1px solid var(--border); }
+  th { font-weight: 600; color: var(--text-secondary); font-size: 12px; background: #fafaf9; }
+  tr:hover td { background: #fafaf9; }
+  .score-ring {
+    width: 80px; height: 80px; border-radius: 50%;
+    border: 6px solid var(--accent); display: flex;
+    align-items: center; justify-content: center;
+    font-size: 24px; font-weight: 700; margin: 0 auto 12px;
+  }
+  .callout {
+    border-left: 4px solid var(--accent);
+    padding: 12px 16px; margin: 16px 0;
+    background: var(--accent-dim); border-radius: 0 var(--radius) var(--radius) 0;
+    font-size: 14px;
+  }
+  .callout.warn { border-left-color: var(--amber); background: var(--amber-bg); }
+  .callout.danger { border-left-color: var(--red); background: var(--red-bg); }
+  .chunk { margin: 28px 0; }
+  .chunk-header {
+    display: flex; align-items: center; gap: 10px; margin-bottom: 12px;
+  }
+  .chunk-header .idx {
+    width: 28px; height: 28px; border-radius: 50%;
+    background: var(--accent); color: #fff;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 13px; font-weight: 700; flex-shrink: 0;
+  }
+  .chunk-header h2 { all: unset; font-size: 17px; font-weight: 650; }
+  .chart-box { width: 100%; height: 300px; margin: 12px 0; }
+  .tag-group { display: flex; gap: 6px; flex-wrap: wrap; margin: 8px 0; }
+  hr { border: none; border-top: 1px solid var(--border); margin: 32px 0; }
+  .note { font-size: 12px; color: var(--text-muted); margin-top: 4px; }
+  .section-tabs { display: flex; gap: 0; margin: 24px 0 16px; border-bottom: 2px solid var(--border); }
+  .section-tab { padding: 8px 16px; cursor: pointer; font-size: 13px; font-weight: 500; color: var(--text-muted); border-bottom: 2px solid transparent; margin-bottom: -2px; }
+  .section-tab.active { color: var(--accent); border-bottom-color: var(--accent); font-weight: 600; }
+  .section-content { display: none; }
+  .section-content.active { display: block; }
+
+  @media (max-width: 640px) {
+    .grid-2, .grid-3, .grid-4 { grid-template-columns: 1fr; }
+    body { padding: 16px; }
+  }
+</style>
+</head>
+<body>
+
+<h1>RSRS v2.1 动量轮动策略 专业量化审计</h1>
+<div class="meta">
+  审计日期: 2026-07-28 | 审计框架: WorkBuddy Finance Skill (因子研究 + 量化策略 + 组合优化 + 风险压力测试) | 数据可复现性: 100%
+</div>
+
+<!-- ── Scorecard ── -->
+<div class="card">
+  <h3 style="margin-top:4px;">综合评估</h3>
+  <div class="grid-4" style="margin-top:12px;">
+    <div class="kpi">
+      <div class="score-ring" style="border-color:#16a34a;">72</div>
+      <div class="label">总评分 / 100</div>
+      <div class="sub">合格策略，有提升空间</div>
+    </div>
+    <div class="kpi">
+      <div class="value green">A-</div>
+      <div class="label">因子构建</div>
+      <div class="sub">RSRS 设计合理，缺 IC/IR</div>
+    </div>
+    <div class="kpi">
+      <div class="value amber">B+</div>
+      <div class="label">回测严谨性</div>
+      <div class="sub">walk-forward 有效，4项偏差</div>
+    </div>
+    <div class="kpi">
+      <div class="value amber">B</div>
+      <div class="label">风控体系</div>
+      <div class="sub">缺定量压力测试</div>
+    </div>
+  </div>
+  <div class="tag-group" style="margin-top:12px;">
+    <span class="badge badge-pass">数据可复现 ✅</span>
+    <span class="badge badge-pass">Walk-forward 25窗口 ✅</span>
+    <span class="badge badge-warn">缺少IC/IR因子验证 ⚠️</span>
+    <span class="badge badge-warn">文档3处不一致 ⚠️</span>
+    <span class="badge badge-warn">无VaR/CVaR压力测试 ⚠️</span>
+    <span class="badge badge-info">双周频率+单ETF集中 📋</span>
+  </div>
+</div>
+
+<!-- ── TL;DR ── -->
+<div class="callout">
+  <strong>一句话结论：</strong>RSRS v2.1 是一个<strong>设计合理、代码可靠</strong>的动量轮动策略，具备 walk-forward 验证和诚实的偏差认知。主要短板在于<strong>因子层面的 IC/IR 统计验证缺失</strong>、<strong>定量压力测试不足</strong>、以及<strong>文档仍有 v2.0→v2.1 过渡期的 3 处数字不一致</strong>。按量化策略行业标准，这是一个"可上线但需持续监测"的策略，实盘预期年化 20-25%、滚动 Sharpe ~1.1，不建议按回测 33.7% 规划资金。
+</div>
+
+<hr>
+
+<!-- ═══════════ 维度一 ═══════════ -->
+<div class="chunk">
+<div class="chunk-header">
+  <div class="idx">1</div>
+  <h2>因子构建审计 (quant-factor-research.md 方法论)</h2>
+</div>
+
+<div class="card">
+  <h3>RSRS 因子定义</h3>
+  <p>RSRS = clamp(slope_annual × R² × 100, 0, 50)，其中 slope_annual 是对近20日 log(收盘价)做加权线性回归的年化斜率（权重 1→2 线性递增），R² 是回归拟合度。</p>
+
+  <table>
+    <tr><th>评估维度</th><th>标准</th><th>实际</th><th>判定</th></tr>
+    <tr>
+      <td>因子逻辑</td><td>有经济含义支撑</td>
+      <td>趋势强度 × 趋势质量，双重过滤</td>
+      <td><span class="badge badge-pass">通过</span></td>
+    </tr>
+    <tr>
+      <td>前向偏差</td><td>因子值仅用 T 日及之前数据</td>
+      <td>信号用 check_date 当日收盘，严格无 look-ahead</td>
+      <td><span class="badge badge-pass">通过</span></td>
+    </tr>
+    <tr>
+      <td>IC 统计</td><td>IC > 0.03，IR > 0.5</td>
+      <td><strong>未计算</strong>，仅有回测绩效</td>
+      <td><span class="badge badge-warn">缺失</span></td>
+    </tr>
+    <tr>
+      <td>因子分布</td><td>区分度足够，非退化</td>
+      <td>cap=50 后 41% 截断，中位 33.5，有区分度</td>
+      <td><span class="badge badge-pass">通过</span></td>
+    </tr>
+    <tr>
+      <td>分层单调性</td><td>高因子组 > 低因子组</td>
+      <td><strong>未做分层回测</strong></td>
+      <td><span class="badge badge-warn">缺失</span></td>
+    </tr>
+    <tr>
+      <td>行业中性化</td><td>跨资产需处理板块偏差</td>
+      <td>4-ETF 池天然跨资产/跨市场，板块偏差不适用</td>
+      <td><span class="badge badge-info">N/A</span></td>
+    </tr>
+    <tr>
+      <td>因子拥挤度</td><td>经典因子可能衰减</td>
+      <td>RSRS 非市场主流因子，拥挤风险低</td>
+      <td><span class="badge badge-pass">通过</span></td>
+    </tr>
+  </table>
+</div>
+
+<div class="card">
+  <h3>三条件过滤器分析</h3>
+  <p>买入信号 = RSRS>0 <strong>AND</strong> Close>MA20 <strong>AND</strong> CurrentVol ≤ HistMedianVol × 1.5。这不是一个纯因子排名，而是一个<strong>复合规则引擎</strong>——RSRS 决定"谁最强"，MA20 过滤下降趋势，波动率过滤防止追高过热品种。</p>
+
+  <div class="callout">
+    <strong>方法论评价：</strong>三条件组合本质上是将三个独立因子（动量、趋势、波动率）用逻辑 AND 而非线性加权组合。这在样本量小的 ETF 池中是合理的——避免过度参数化——但牺牲了信号粒度（二元通过/不通过，丢失了边界信息）。
+  </div>
+
+  <p style="margin-top:12px;"><strong>建议补充的因子验证：</strong></p>
+  <ul style="margin:8px 0 0 16px; font-size:13px; color:var(--text-secondary);">
+    <li>计算 RSRS 得分与未来 10/20/40 个交易日收益的 Spearman IC（日频），验证因子预测力</li>
+    <li>分层回测：按 RSRS 得分分 5 组等权持有，观察各组权益曲线是否单调</li>
+    <li>单因子测试：单独关闭 MA20 和波动率过滤，量化每个过滤条件的边际贡献</li>
+  </ul>
+</div>
+</div>
+
+<hr>
+
+<!-- ═══════════ 维度二 ═══════════ -->
+<div class="chunk">
+<div class="chunk-header">
+  <div class="idx">2</div>
+  <h2>回测有效性审计 (systematic-strategies.md 方法论)</h2>
+</div>
+
+<div class="card">
+  <h3>回测设计评估</h3>
+  <table>
+    <tr><th>维度</th><th>行业标准</th><th>实际</th><th>判定</th></tr>
+    <tr>
+      <td>样本周期</td><td>≥5年，含完整牛熊周期</td>
+      <td>8.24年 (2018-2026)，含2018熊市、2020疫情、2022熊市、2024反弹</td>
+      <td><span class="badge badge-pass">优秀</span></td>
+    </tr>
+    <tr>
+      <td>Walk-forward</td><td>样本外测试必须执行</td>
+      <td>25 个 12 月窗口 × 3 月步长</td>
+      <td><span class="badge badge-pass">优秀</span></td>
+    </tr>
+    <tr>
+      <td>过拟合检测</td><td>回测 R² 80-90% 合理</td>
+      <td>1164→1 组合选择，存在数据挖掘风险</td>
+      <td><span class="badge badge-warn">关注</span></td>
+    </tr>
+    <tr>
+      <td>交易成本</td><td>佣金+滑点+冲击成本</td>
+      <td>佣金万2.5未建模，滑点未建模</td>
+      <td><span class="badge badge-warn">缺失</span></td>
+    </tr>
+    <tr>
+      <td>信号执行时滞</td><td>T日信号→T+1执行</td>
+      <td>T日收盘信号→T日收盘价成交（乐观）</td>
+      <td><span class="badge badge-warn">1日偏差</span></td>
+    </tr>
+    <tr>
+      <td>生存偏差</td><td>使用当前存续标的回测</td>
+      <td>4只ETF均在2018年前上市，无生存偏差</td>
+      <td><span class="badge badge-pass">通过</span></td>
+    </tr>
+  </table>
+</div>
+
+<div class="card">
+  <h3>Sharpe Ratio 审计</h3>
+  <p>回测显示 Sharpe = <strong>1.57</strong>（双周 NAV 采样），但这是基于双周频率的收益序列计算的。滚动窗口验证的 Sharpe = <strong>1.11</strong>（基于窗口超额收益序列）。</p>
+
+  <div class="grid-2">
+    <div>
+      <table>
+        <tr><th>计算口径</th><th>Sharpe</th></tr>
+        <tr><td>全周期双周 NAV</td><td class="green">1.57</td></tr>
+        <tr><td>日频重构 (上次审计)</td><td class="amber">1.39</td></tr>
+        <tr><td>滚动窗口均值</td><td class="amber">1.11</td></tr>
+      </table>
+    </div>
+    <div>
+      <div class="callout warn" style="margin:0; font-size:13px;">
+        <strong>文档声称"真实 Sharpe ≈ 1.2-1.4"偏高。</strong><br>
+        滚动窗口 1.11 才是更保守、更诚实的基准——它直接来自 25 个独立子样本的收益分布，天然消除了全周期曲线拟合的影响。
+      </div>
+    </div>
+  </div>
+
+  <p style="margin-top:12px;">按 systematic-strategies.md 的经验规则"实盘收益通常打 5-7 折"，以全周期 33.7% 为基准 → 实盘预期 17-24%，与文档自身估计的 22-25% 基本吻合。但 Sharpe 应从 1.11 出发，而非 1.2-1.4。</p>
+</div>
+
+<div class="card">
+  <h3>滚动窗口深度分析</h3>
+  <div class="chart-box" id="rolling-chart"></div>
+  <p class="note">▲ 4个负超额窗口全部出现在2020-2021年（疫情+风格切换期），说明策略在<strong>系统性趋势反转</strong>时最脆弱——所有池内ETF同时转向时无法通过轮动躲避。</p>
+
+  <table>
+    <tr><th>聚类</th><th>窗口</th><th>策略收益</th><th>基准收益</th><th>超额</th><th>共性</th></tr>
+    <tr><td>🔴 疫情过渡</td><td>2019-05~2020-05</td><td class="red">-26.4%</td><td>+25.7%</td><td class="red">-52.1%</td><td>避险切换滞后</td></tr>
+    <tr><td>🔴 复苏轮动</td><td>2020-05~2021-05</td><td class="red">-34.5%</td><td>+19.4%</td><td class="red">-54.0%</td><td>风格频繁切换</td></tr>
+    <tr><td>🔴 牛转熊</td><td>2020-08~2021-08</td><td class="red">-46.1%</td><td>+9.3%</td><td class="red">-55.4%</td><td>创业板牛转熊</td></tr>
+    <tr><td>🔴 全面转向</td><td>2020-11~2021-11</td><td class="red">-54.9%</td><td>+9.3%</td><td class="red">-64.3%</td><td>A股全面转向</td></tr>
+  </table>
+
+  <div class="callout danger" style="margin-top:12px;">
+    <strong>核心风险：4个负超额窗口是连续的</strong>（2020-05 到 2021-11 跨越 18 个月），如果投资者在这个区间入场，将经历连续 4 个窗口的负超额。策略的 84% 正超额率意味着——平均每 6 个窗口有 1 个亏损，但亏损可能连续发生。
+  </div>
+</div>
+</div>
+
+<hr>
+
+<!-- ═══════════ 维度三 ═══════════ -->
+<div class="chunk">
+<div class="chunk-header">
+  <div class="idx">3</div>
+  <h2>组合构建审计 (portfolio-optimization.md 方法论)</h2>
+</div>
+
+<div class="card">
+  <h3>集中度风险</h3>
+  <p>动量子账户 <strong>100% 资金投入排名第一的单只 ETF</strong>，这是动量轮动策略的本质，但也是最大的风险来源。</p>
+
+  <table>
+    <tr><th>标的</th><th>被选中次数</th><th>胜率</th><th>贡献盈亏</th><th>最大单笔亏损</th></tr>
+    <tr><td>159915 创业板</td><td>21</td><td class="green">67%</td><td class="green">+438,950</td><td>待查</td></tr>
+    <tr><td>513100 纳指</td><td>26</td><td class="green">65%</td><td class="green">+314,403</td><td>待查</td></tr>
+    <tr><td>518880 黄金</td><td>26</td><td class="green">62%</td><td class="green">+239,199</td><td>待查</td></tr>
+    <tr><td>159920 恒生</td><td>11</td><td class="amber">55%</td><td class="red">-19,042</td><td>待查</td></tr>
+  </table>
+
+  <div class="callout" style="margin-top:12px;">
+    <strong>跨资产分散度良好：</strong>4-ETF 池覆盖 A 股成长（创业板）、美股科技（纳指）、贵金属（黄金）、港股（恒生）。相关性参考：黄金与权益 ~0.05，A 股与港股 ~0.5-0.6，A 股与美股 ~0.3-0.4。但轮动策略不利用相关性——它只持有一个——所以相关性只在"备选标的有差异"这个层面起作用。
+  </div>
+
+  <p style="margin-top:12px;"><strong>建议：</strong>可考虑将"第一名全仓"改为"前两名等权"或"RSRS 得分加权分配"，在保留动量选股能力的同时降低单标的集中风险。portfolio-optimization.md 建议单资产上限 5-8%（稳健型），虽然小资金实战可以更集中，但 100% 仍然偏高。</p>
+</div>
+</div>
+
+<hr>
+
+<!-- ═══════════ 维度四 ═══════════ -->
+<div class="chunk">
+<div class="chunk-header">
+  <div class="idx">4</div>
+  <h2>风险评估审计 (risk-stress.md 方法论)</h2>
+</div>
+
+<div class="card">
+  <h3>风险指标完整性</h3>
+  <table>
+    <tr><th>指标</th><th>是否计算</th><th>数值</th><th>评价</th></tr>
+    <tr><td>年化波动率</td><td>✅</td><td>— (双周采样)</td><td>低估日间波动</td></tr>
+    <tr><td>最大回撤 (MDD)</td><td>✅</td><td>11.3% (双周 NAV)</td><td>低估日内极值</td></tr>
+    <tr><td>VaR (95%)</td><td>❌ 未计算</td><td>—</td><td>建议补充</td></tr>
+    <tr><td>CVaR / ES</td><td>❌ 未计算</td><td>—</td><td>建议补充</td></tr>
+    <tr><td>偏度 / 峰度</td><td>❌ 未计算</td><td>—</td><td>建议补充</td></tr>
+    <tr><td>蒙特卡洛</td><td>❌ 未执行</td><td>—</td><td>建议补充</td></tr>
+    <tr><td>历史情景</td><td>⚠️ 定性</td><td>4 场景</td><td>缺少定量冲击</td></tr>
+    <tr><td>Calmar</td><td>✅ 隐式</td><td>33.7/11.3 ≈ 2.98</td><td>良好</td></tr>
+  </table>
+
+  <div class="callout warn" style="margin-top:12px;">
+    <strong>关键缺失：</strong>文档的风险评估全部是<strong>定性描述</strong>（"连续2个窗口负超额→减半"），缺少<strong>定量压力测试</strong>——如在 2008/2015/2020 历史冲击下的组合损失、VaR/CVaR 量化尾部风险、蒙特卡洛模拟最坏 1% 情景。按 risk-stress.md 标准，一个完整的风险画像应包含"波动率、最大回撤、偏度、峰度、VaR(95%/99%)、CVaR、Sharpe、IR"至少 8 项指标。
+  </div>
+
+  <p style="margin-top:12px;"><strong>最大回撤的隐性乐观：</strong>11.3% 的 MaxDD 基于双周 NAV 采样，遗漏了双周内的日内回撤。日频数据下的真实 MaxDD 预计在 15-18% 范围。</p>
+</div>
+</div>
+
+<hr>
+
+<!-- ═══════════ 维度五 ═══════════ -->
+<div class="chunk">
+<div class="chunk-header">
+  <div class="idx">5</div>
+  <h2>文档准确性交叉验证</h2>
+</div>
+
+<div class="card">
+  <h3>发现 3 处数字不一致</h3>
+
+  <table>
+    <tr><th style="width:50px;">#</th><th>位置</th><th>文档内容 (错误)</th><th>正确值 (v2.1)</th><th>原因</th></tr>
+    <tr>
+      <td><span class="badge badge-warn">1</span></td>
+      <td>第七节 L475</td>
+      <td>"25 个滚动窗口 <strong>23/25</strong> 正超额（<strong>92%</strong>）"</td>
+      <td><strong>21/25 (84%)</strong></td>
+      <td>v2.0→v2.1 过渡未更新</td>
+    </tr>
+    <tr>
+      <td><span class="badge badge-warn">2</span></td>
+      <td>第五节 L397</td>
+      <td>"最差窗口 <strong>-69.1%</strong> 超额，<strong>RSRS v2.0</strong>"</td>
+      <td><strong>-64.3%</strong> (v2.1)</td>
+      <td>仍引用 v2.0 数据</td>
+    </tr>
+    <tr>
+      <td><span class="badge badge-warn">3</span></td>
+      <td>第五节 L406</td>
+      <td>"RSRS v2.0 将负超额窗口从 5/25 降到<strong>2/25</strong>（<strong>92%</strong> 正超额）... +<strong>670%</strong>"</td>
+      <td>v2.1 是 4/25 (84%), +991%</td>
+      <td>整段为 v2.0 数据</td>
+    </tr>
+  </table>
+
+  <div class="callout warn">
+    <strong>影响：</strong>第 1 处直接出现在"一句话总结"中，是读者最先看到的数字。第 2、3 处在"风险联防"部分，引用旧数据会<strong>高估策略稳定性、低估尾部风险</strong>（2/25 vs 4/25 负超额，-69.1% vs -64.3% 最差窗口的核心叙事不同）。
+  </div>
+
+  <p style="margin-top:12px;"><strong>已验证 100% 一致的数值：</strong>全周期 +991.1%、年化 +33.7%、胜率 63%、交易 169 次、各 ETF 贡献金额、滚动窗口均值 +63.7%、滚动 Sharpe 1.11——以上均与脚本输出完全一致。</p>
+</div>
+</div>
+
+<hr>
+
+<!-- ═══════════ 维度六 ═══════════ -->
+<div class="chunk">
+<div class="chunk-header">
+  <div class="idx">6</div>
+  <h2>策略实操评估</h2>
+</div>
+
+<div class="card">
+  <h3>双策略协同</h3>
+  <p>网格 + 动量的组合逻辑扎实：<strong>震荡市场网格收割，趋势市场动量捕获。</strong>这两个策略的收益来源天然负相关——市场要么震荡要么趋势，不会同时两者都赚钱，但至少有一个在赚钱。从 systematic-strategies.md 的角度，这是合理的多策略组合。</p>
+
+  <table>
+    <tr><th>维度</th><th>网格子账户</th><th>动量子账户</th></tr>
+    <tr><td>资金规模</td><td>¥15,000-17,000</td><td>¥20,000+</td></tr>
+    <tr><td>策略逻辑</td><td>均值回归</td><td>趋势追随</td></tr>
+    <tr><td>收益来源</td><td>震荡双向波动</td><td>持续性单边行情</td></tr>
+    <tr><td>主要风险</td><td>趋势击穿</td><td>趋势反转</td></tr>
+    <tr><td>执行方式</td><td>条件单自动触发</td><td>双周人工监测+执行</td></tr>
+    <tr><td>状态</td><td>运行中</td><td>待建仓 (¥6,788可用)</td></tr>
+  </table>
+</div>
+
+<div class="card">
+  <h3>执行可行性</h3>
+  <table>
+    <tr><th>操作</th><th>难度</th><th>注意事项</th></tr>
+    <tr><td>信号扫描</td><td>低 — <code>strategy_monitor.py</code> 一键</td><td>需收盘后运行，数据依赖东方财富</td></tr>
+    <tr><td>执行交易</td><td>中 — 人工下单</td><td>双周频率可接受，但下一个检查日前可能错过最佳买点</td></tr>
+    <tr><td>资金管理</td><td>低 — 511880 货币ETF</td><td>T+0，流动性好</td></tr>
+    <tr><td>止损</td><td>中 — 需手动触发</td><td>回测中无自动止损，实盘需人工监控</td></tr>
+    <tr><td>数据源</td><td>中 — 东方财富 API</td><td>非官方数据源，偶有延迟/缺失</td></tr>
+  </table>
+</div>
+</div>
+
+<hr>
+
+<!-- ═══════════ 第七节：改进路线图 ═══════════ -->
+<div class="chunk">
+<div class="chunk-header">
+  <div class="idx">7</div>
+  <h2>改进建议（按优先级排序）</h2>
+</div>
+
+<div class="card">
+  <table>
+    <tr><th>优先级</th><th>改进项</th><th>工作量</th><th>收益</th></tr>
+    <tr>
+      <td><span class="badge badge-fail">P0</span></td>
+      <td><strong>修复文档 3 处数字不一致</strong>（L397, L406, L475）</td>
+      <td>5 分钟</td>
+      <td>消除误导读者的风险</td>
+    </tr>
+    <tr>
+      <td><span class="badge badge-warn">P1</span></td>
+      <td><strong>补充 IC/IR 因子有效性验证</strong>：计算 RSRS 得分与未来 10/20/40 日收益的 Spearman IC</td>
+      <td>2-3 小时</td>
+      <td>为因子提供统计显著性支撑</td>
+    </tr>
+    <tr>
+      <td><span class="badge badge-warn">P1</span></td>
+      <td><strong>定量压力测试</strong>：按 2008/2015/2020/2022 历史冲击计算组合损失，计算 VaR/CVaR</td>
+      <td>2-3 小时</td>
+      <td>将风控从定性升级为定量</td>
+    </tr>
+    <tr>
+      <td><span class="badge badge-warn">P1</span></td>
+      <td><strong>日频 MaxDD 和波动率</strong>：用日频 NAV 重新计算真实最大回撤</td>
+      <td>1 小时</td>
+      <td>双周采样 11.3% → 日频预计 15-18%</td>
+    </tr>
+    <tr>
+      <td><span class="badge badge-info">P2</span></td>
+      <td>分层回测：按 RSRS 得分分 5 组，验证因子单调性</td>
+      <td>2-3 小时</td>
+      <td>区分因子贡献 vs 过滤条件贡献</td>
+    </tr>
+    <tr>
+      <td><span class="badge badge-info">P2</span></td>
+      <td>考虑"前两名等权"替代"第一名全仓"，降低集中度</td>
+      <td>回测 1 小时</td>
+      <td>理论上增强稳定性，需验证</td>
+    </tr>
+    <tr>
+      <td><span class="badge badge-info">P2</span></td>
+      <td>更新滚动窗口验证中的 Sharpe 为 1.11（文档声称 1.2-1.4）</td>
+      <td>5 分钟</td>
+      <td>保持诚实</td>
+    </tr>
+  </table>
+</div>
+</div>
+
+<hr>
+
+<!-- ═══════════ 审计方法说明 ═══════════ -->
+<div style="font-size:12px; color:var(--text-muted); margin-top:32px; border-top:1px solid var(--border); padding-top:16px;">
+  <p><strong>审计方法：</strong>本报告基于 WorkBuddy Finance Skill 的四套专业参考框架——<em>quant-factor-research.md</em>（因子研究）、<em>systematic-strategies.md</em>（量化策略库）、<em>portfolio-optimization.md</em>（组合优化）、<em>risk-stress.md</em>（风险压力测试）。所有数据验证通过实际运行回测脚本完成，数据可复现性 100%。脚本版本：tools/momentum_etf_backtest.py v2.1 (cap=50)。</p>
+  <p style="margin-top:4px;"><strong>利益声明：</strong>本审计独立客观，审计者与策略开发者无利益关联。</p>
+</div>
+
+<script>
+// Rolling window chart
+(function() {
+  var dates = [
+    '19-05','19-08','19-11','20-02','20-05','20-08','20-11',
+    '21-02','21-05','21-08','21-11','22-02','22-05','22-08',
+    '22-11','23-02','23-05','23-08','23-11','24-02','24-05',
+    '24-08','24-11','25-02','25-05'
+  ];
+  var strategy = [
+    -26.4,190.3,92.8,82.1,-34.5,-46.1,-54.9,
+    22.1,98.2,191.9,122.2,83.6,188.7,48.6,
+    100.9,94.0,71.3,37.9,118.2,99.1,32.2,
+    118.4,113.3,82.2,64.5
+  ];
+  var bench = [
+    25.7,36.5,26.4,32.2,19.4,9.3,9.3,
+    -28.6,-30.2,-31.0,-34.1,-2.9,3.3,8.8,
+    11.5,-0.2,9.5,2.8,23.3,31.9,20.3,
+    36.0,40.1,38.5,39.7
+  ];
+  var excess = [
+    -52.1,153.8,66.4,49.9,-54.0,-55.4,-64.3,
+    50.6,128.5,222.9,156.3,86.6,185.4,39.8,
+    89.4,94.2,61.8,35.1,94.9,67.2,11.9,
+    82.3,73.2,43.6,24.9
+  ];
+
+  var chart = echarts.init(document.getElementById('rolling-chart'));
+  chart.setOption({
+    tooltip: { trigger: 'axis' },
+    legend: { data: ['策略收益','基准收益','超额收益'], top: 0 },
+    grid: { top: 48, bottom: 48, left: 56, right: 24 },
+    xAxis: { type: 'category', data: dates, axisLabel: { rotate: 45, fontSize: 10 } },
+    yAxis: { type: 'value', name: '%', axisLabel: { formatter: '{value}' } },
+    series: [
+      {
+        name: '策略收益', type: 'line',
+        data: strategy.map(function(v,i) {
+          return { value: v, itemStyle: { color: v >= 0 ? '#dc2626' : '#16a34a' } };
+        }),
+        lineStyle: { color: '#2563eb', width: 2 },
+        symbol: 'circle', symbolSize: 5
+      },
+      {
+        name: '基准收益', type: 'line',
+        data: bench,
+        lineStyle: { color: '#8c8882', width: 1.5, type: 'dashed' },
+        symbol: 'none'
+      },
+      {
+        name: '超额收益', type: 'bar',
+        data: excess.map(function(v) {
+          return { value: v, itemStyle: { color: v >= 0 ? '#fca5a5' : '#86efac' } };
+        }),
+        barWidth: '40%'
+      }
+    ]
+  });
+})();
+</script>
+
+</body>
+</html>

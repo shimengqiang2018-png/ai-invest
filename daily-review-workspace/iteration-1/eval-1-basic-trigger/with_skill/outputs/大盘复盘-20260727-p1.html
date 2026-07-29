@@ -1,0 +1,212 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=540, initial-scale=1">
+<meta name="color-scheme" content="only light">
+<style>
+  html { color-scheme: only light !important; }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    width: 540px;
+    min-height: 960px;
+    background: #f2f3f5;
+    font-family: "PingFang SC", "Microsoft YaHei", sans-serif;
+    font-size: 14px;
+    line-height: 1.5;
+    color: #1a1a2e;
+    padding: 36px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+  @media (prefers-color-scheme: dark) {
+    html, body, .card, .index-item, .hero, .hero-stat, .risk-item, .summary-box {
+      background-color: #ffffff !important;
+    }
+    html, body { background-color: #f2f3f5 !important; }
+    body, h1, .index-item .name, .hero-name, .sector-name { color: #1a1a2e !important; }
+  }
+  .card {
+    background: #ffffff;
+    border-radius: 12px;
+    padding: 16px 18px;
+  }
+  .header { text-align: center; padding: 20px 18px 16px; }
+  .header .date { font-size: 13px; color: #8b8fa3; margin-bottom: 4px; }
+  .header h1 { font-size: 22px; font-weight: 700; color: #1a1a2e; margin-bottom: 4px; }
+  .header .tagline {
+    display: inline-block;
+    background: linear-gradient(135deg, #e53e3e, #ff6b6b);
+    color: #fff;
+    font-size: 12px;
+    padding: 3px 12px;
+    border-radius: 20px;
+    font-weight: 600;
+  }
+  .index-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+  }
+  .index-item {
+    background: #fafbfc;
+    border-radius: 10px;
+    padding: 10px 12px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    border-left: 3px solid transparent;
+  }
+  .index-item.winner { border-left-color: #e53e3e; background: #fff5f5; }
+  .index-item.loser { border-left-color: #059669; background: #f0fdf6; }
+  .index-item .left { display: flex; flex-direction: column; }
+  .index-item .name { font-size: 12px; color: #6b7280; margin-bottom: 1px; }
+  .index-item .price { font-size: 16px; font-weight: 700; color: #1a1a2e; }
+  .index-item .chg {
+    font-size: 15px; font-weight: 700;
+    text-align: right; min-width: 64px;
+  }
+  .chg.up { color: #e53e3e; }
+  .chg.down { color: #059669; }
+  .chg.flat { color: #8b8fa3; }
+  .sentiment-row {
+    display: flex; justify-content: space-between; gap: 8px;
+  }
+  .sent-item {
+    flex: 1; text-align: center; padding: 8px 4px;
+    background: #fafbfc; border-radius: 10px;
+  }
+  .sent-item .val { font-size: 18px; font-weight: 700; color: #1a1a2e; }
+  .sent-item .val.red { color: #e53e3e; }
+  .sent-item .val.green { color: #059669; }
+  .sent-item .lbl { font-size: 11px; color: #8b8fa3; margin-top: 2px; }
+  .style-compare {
+    display: flex; gap: 12px;
+  }
+  .style-box {
+    flex: 1; padding: 12px; border-radius: 10px; text-align: center;
+  }
+  .style-box.strong { background: #fff5f5; }
+  .style-box.weak { background: #f0fdf6; }
+  .style-box .label { font-size: 11px; color: #8b8fa3; margin-bottom: 2px; }
+  .style-box .val { font-size: 20px; font-weight: 700; }
+  .style-box.strong .val { color: #e53e3e; }
+  .style-box.weak .val { color: #059669; }
+  .style-box .detail { font-size: 11px; color: #6b7280; margin-top: 2px; }
+  .macro-row { display: flex; gap: 16px; font-size: 12px; color: #6b7280; justify-content: center; flex-wrap: wrap; }
+  .macro-row span { white-space: nowrap; }
+  .macro-row .label { color: #8b8fa3; }
+  .macro-row .value { font-weight: 600; color: #1a1a2e; }
+  .section-title { font-size: 14px; font-weight: 700; color: #1a1a2e; margin-bottom: 10px; padding-left: 8px; border-left: 3px solid #e53e3e; }
+  .footer {
+    text-align: center; font-size: 10px; color: #b0b5c6;
+    padding: 8px 0 0; line-height: 1.6;
+  }
+</style>
+</head>
+<body>
+
+<div class="card header">
+  <div class="date">2026年7月27日 周一</div>
+  <h1>A股市场复盘</h1>
+  <div class="tagline">强修复 · 百股涨停 · 成交2.08万亿</div>
+</div>
+
+<div class="card">
+  <div class="section-title">主要指数行情</div>
+  <div class="index-grid">
+    <div class="index-item">
+      <div class="left"><span class="name">上证指数</span><span class="price">3,858.25</span></div>
+      <span class="chg up">+1.15%</span>
+    </div>
+    <div class="index-item">
+      <div class="left"><span class="name">深证成指</span><span class="price">14,148.73</span></div>
+      <span class="chg up">+2.72%</span>
+    </div>
+    <div class="index-item">
+      <div class="left"><span class="name">创业板指</span><span class="price">3,590.79</span></div>
+      <span class="chg up">+3.16%</span>
+    </div>
+    <div class="index-item">
+      <div class="left"><span class="name">沪深300</span><span class="price">4,702.43</span></div>
+      <span class="chg up">+1.15%</span>
+    </div>
+    <div class="index-item loser">
+      <div class="left"><span class="name">上证50</span><span class="price">2,950.43</span></div>
+      <span class="chg down">-0.20%</span>
+    </div>
+    <div class="index-item">
+      <div class="left"><span class="name">中证500</span><span class="price">7,720.60</span></div>
+      <span class="chg up">+2.49%</span>
+    </div>
+    <div class="index-item winner">
+      <div class="left"><span class="name">中证1000</span><span class="price">7,228.78</span></div>
+      <span class="chg up">+3.33%</span>
+    </div>
+    <div class="index-item">
+      <div class="left"><span class="name">科创50</span><span class="price">1,807.95</span></div>
+      <span class="chg up">+1.16%</span>
+    </div>
+  </div>
+</div>
+
+<div class="card">
+  <div class="section-title">市场情绪</div>
+  <div class="sentiment-row">
+    <div class="sent-item">
+      <div class="val red">5,193</div>
+      <div class="lbl">上涨家数</div>
+    </div>
+    <div class="sent-item">
+      <div class="val green">286</div>
+      <div class="lbl">下跌家数</div>
+    </div>
+    <div class="sent-item">
+      <div class="val" style="color:#e53e3e">2.08万亿</div>
+      <div class="lbl">成交额 ↑1455亿</div>
+    </div>
+    <div class="sent-item">
+      <div class="val red">111</div>
+      <div class="lbl">涨停 跌停6</div>
+    </div>
+  </div>
+  <div style="margin-top:8px;font-size:11px;color:#8b8fa3;text-align:center;">
+    约94%个股上涨 · 超200股涨超9% · 赚钱效应全面回暖
+  </div>
+</div>
+
+<div class="card">
+  <div class="section-title">风格特征 + 宏观速览</div>
+  <div class="style-compare">
+    <div class="style-box strong">
+      <div class="label">最强指数</div>
+      <div class="val">+3.33%</div>
+      <div class="detail">中证1000</div>
+    </div>
+    <div class="style-box weak">
+      <div class="label">最弱指数</div>
+      <div class="val">-0.20%</div>
+      <div class="detail">上证50</div>
+    </div>
+  </div>
+  <div style="margin-top:10px;font-size:12px;color:#6b7280;text-align:center;">
+    小盘成长 &gt; 大盘价值 · 创业/中证1000领涨 · 上证50独绿
+  </div>
+  <div style="margin-top:8px;padding-top:8px;border-top:1px solid #f0f0f0;" class="macro-row">
+    <span><span class="label">USD/CNY</span> <span class="value">6.78</span></span>
+    <span><span class="label">北向成交</span> <span class="value">2,769亿</span></span>
+    <span><span class="label">占成交比</span> <span class="value">13.3%</span></span>
+  </div>
+  <div style="margin-top:4px;font-size:11px;color:#8b8fa3;text-align:center;">
+    前日(7/24)仅495家上涨 · 今日强修复 · 长鑫科技上市虹吸千亿资金
+  </div>
+</div>
+
+<div class="footer">
+  数据来源: 腾讯行情 · 东方财富 · 蛋卷基金 · 证券时报<br>
+  免责声明: 本复盘基于公开数据，仅供研究参考，不构成投资建议
+</div>
+
+</body>
+</html>

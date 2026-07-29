@@ -1,0 +1,222 @@
+{
+  "513180": [
+    {
+      "date": "2026-07-07",
+      "action": "sell",
+      "price": "0.583",
+      "shares": 200,
+      "base_price_before": "0.564",
+      "base_price_after": "0.583"
+    },
+    {
+      "date": "2026-07-08",
+      "action": "sell",
+      "price": "0.597",
+      "shares": 200,
+      "base_price_before": "0.583",
+      "base_price_after": "0.597"
+    },
+    {
+      "date": "2026-07-09",
+      "action": "sell",
+      "price": "0.612",
+      "shares": 200,
+      "base_price_before": "0.597",
+      "base_price_after": "0.612"
+    },
+    {
+      "date": "2026-07-09",
+      "action": "buy",
+      "price": "0.598",
+      "shares": 200,
+      "base_price_before": "0.612",
+      "base_price_after": "0.598"
+    },
+    {
+      "date": "2026-07-10",
+      "action": "sell",
+      "price": "0.612",
+      "shares": 300,
+      "base_price_before": "0.598",
+      "base_price_after": "0.612"
+    },
+    {
+      "date": "2026-07-13",
+      "action": "buy",
+      "price": "0.598",
+      "shares": 300,
+      "base_price_before": "0.612",
+      "base_price_after": "0.598"
+    },
+    {
+      "date": "2026-07-14",
+      "action": "buy",
+      "price": "0.584",
+      "shares": 300,
+      "base_price_before": "0.598",
+      "base_price_after": "0.584"
+    },
+    {
+      "date": "2026-07-15",
+      "action": "sell",
+      "price": "0.597",
+      "shares": 300,
+      "base_price_before": "0.584",
+      "base_price_after": "0.597"
+    },
+    {
+      "date": "2026-07-16",
+      "action": "sell",
+      "price": "0.612",
+      "shares": 300,
+      "base_price_before": "0.597",
+      "base_price_after": "0.612"
+    },
+    {
+      "date": "2026-07-17",
+      "action": "buy",
+      "price": "0.598",
+      "shares": 300,
+      "base_price_before": "0.612",
+      "base_price_after": "0.598"
+    },
+    {
+      "date": "2026-07-17",
+      "action": "buy",
+      "price": "0.584",
+      "shares": 300,
+      "base_price_before": "0.598",
+      "base_price_after": "0.584"
+    },
+    {
+      "date": "2026-07-20",
+      "action": "sell",
+      "price": "0.603",
+      "shares": 300,
+      "base_price_before": "0.584",
+      "base_price_after": "0.603"
+    }
+  ],
+  "159915": [
+    {
+      "date": "2026-07-21",
+      "action": "sell",
+      "price": "3.507",
+      "shares": 100,
+      "base_price_before": "3.421",
+      "base_price_after": "3.507"
+    },
+    {
+      "date": "2026-07-21",
+      "action": "buy",
+      "price": "3.418",
+      "shares": 100,
+      "base_price_before": "3.507",
+      "base_price_after": "3.418"
+    },
+    {
+      "date": "2026-07-21",
+      "action": "sell",
+      "price": "3.505",
+      "shares": 100,
+      "base_price_before": "3.418",
+      "base_price_after": "3.505"
+    },
+    {
+      "date": "2026-07-21",
+      "action": "sell",
+      "price": "3.592",
+      "shares": 100,
+      "base_price_before": "3.505",
+      "base_price_after": "3.592"
+    },
+    {
+      "date": "2026-07-21",
+      "action": "sell",
+      "price": "3.682",
+      "shares": 100,
+      "base_price_before": "3.592",
+      "base_price_after": "3.682"
+    },
+    {
+      "date": "2026-07-22",
+      "action": "buy",
+      "price": "3.589",
+      "shares": 100,
+      "base_price_before": "3.682",
+      "base_price_after": "3.589"
+    },
+    {
+      "date": "2026-07-28",
+      "action": "buy",
+      "price": "3.500",
+      "shares": 100,
+      "base_price_before": "3.589",
+      "base_price_after": "3.500"
+    },
+    {
+      "date": "2026-07-28",
+      "action": "buy",
+      "price": "3.412",
+      "shares": 100,
+      "base_price_before": "3.500",
+      "base_price_after": "3.412"
+    }
+  ],
+  "510300": [
+    {
+      "date": "2026-07-21",
+      "action": "sell",
+      "price": "4.682",
+      "shares": 100,
+      "base_price_before": "4.599",
+      "base_price_after": "4.682"
+    },
+    {
+      "date": "2026-07-21",
+      "action": "sell",
+      "price": "4.767",
+      "shares": 100,
+      "base_price_before": "4.682",
+      "base_price_after": "4.767"
+    }
+  ],
+  "512880": [
+    {
+      "date": "2026-07-24",
+      "action": "buy",
+      "price": "1.113",
+      "shares": 6500,
+      "base_price_before": "1.113",
+      "base_price_after": "1.113"
+    },
+    {
+      "date": "2026-07-28",
+      "action": "buy",
+      "price": "1.086",
+      "shares": 300,
+      "base_price_before": "1.113",
+      "base_price_after": "1.086"
+    }
+  ],
+  "512010": [
+    {
+      "date": "2026-07-24",
+      "action": "buy",
+      "price": "0.371",
+      "shares": 5000,
+      "base_price_before": "0.371",
+      "base_price_after": "0.371"
+    }
+  ],
+  "512690": [
+    {
+      "date": "2026-07-24",
+      "action": "buy",
+      "price": "0.420",
+      "shares": 5000,
+      "base_price_before": "0.420",
+      "base_price_after": "0.420"
+    }
+  ]
+}

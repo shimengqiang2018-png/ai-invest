@@ -1,0 +1,1 @@
+../skills/investment-analyzer/scripts/fetch_data.py

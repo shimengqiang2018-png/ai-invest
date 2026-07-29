@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=540, initial-scale=1">
+<meta name="color-scheme" content="only light">
+<style>
+  html { color-scheme: only light !important; }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    width: 540px;
+    min-height: 960px;
+    background: #f2f3f5;
+    font-family: "PingFang SC", "Microsoft YaHei", sans-serif;
+    font-size: 14px;
+    line-height: 1.5;
+    color: #1a1a2e;
+    padding: 36px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+  @media (prefers-color-scheme: dark) {
+    html, body, .card, .index-item, .hero, .hero-stat, .risk-item, .summary-box {
+      background-color: #ffffff !important;
+    }
+    html, body { background-color: #f2f3f5 !important; }
+    body, h1, .index-item .name, .hero-name, .sector-name { color: #1a1a2e !important; }
+  }
+  .card {
+    background: #ffffff;
+    border-radius: 12px;
+    padding: 16px 18px;
+  }
+  .header { text-align: center; padding: 20px 18px 16px; }
+  .header .date { font-size: 13px; color: #8b8fa3; margin-bottom: 4px; }
+  .header h1 { font-size: 20px; font-weight: 700; color: #1a1a2e; }
+  .section-title { font-size: 14px; font-weight: 700; color: #1a1a2e; margin-bottom: 10px; padding-left: 8px; border-left: 3px solid #e53e3e; }
+
+  /* Hero card */
+  .hero-card { background: linear-gradient(135deg, #fff5f5 0%, #fff0f0 100%); border: 1px solid #fecaca; }
+  .hero-top { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 8px; }
+  .hero-code { font-size: 11px; color: #8b8fa3; }
+  .hero-name { font-size: 22px; font-weight: 800; color: #1a1a2e; }
+  .hero-sub { font-size: 11px; color: #6b7280; margin-bottom: 10px; }
+  .hero-stats { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; margin-bottom: 10px; }
+  .hero-stat { background: #fff; border-radius: 8px; padding: 8px; text-align: center; }
+  .hero-stat .val { font-size: 17px; font-weight: 700; color: #e53e3e; }
+  .hero-stat .lbl { font-size: 10px; color: #8b8fa3; }
+  .hero-records { font-size: 11px; color: #6b7280; line-height: 1.6; }
+  .hero-records b { color: #e53e3e; }
+
+  /* Sectors */
+  .sector-list { display: flex; flex-direction: column; gap: 6px; }
+  .sector-row { display: flex; justify-content: space-between; align-items: center; padding: 8px 12px; background: #fafbfc; border-radius: 8px; }
+  .sector-row .sn { font-size: 12px; font-weight: 600; color: #1a1a2e; }
+  .sector-row .chg { font-size: 14px; font-weight: 700; }
+  .sector-row .chg.up { color: #e53e3e; }
+  .sector-row .chg.down { color: #059669; }
+  .sector-row.rank-1 { background: #fff5f5; }
+  .sector-row.rank-1-d { background: #f0fdf6; }
+  .sector-divider { font-size: 11px; color: #8b8fa3; text-align: center; padding: 4px 0; }
+
+  /* Lianban */
+  .lianban-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+  .lb-item { background: #fafbfc; border-radius: 8px; padding: 8px 12px; text-align: center; }
+  .lb-item .tier { font-size: 16px; font-weight: 700; color: #e53e3e; }
+  .lb-item .names { font-size: 11px; color: #6b7280; }
+  .lb-item .count { font-size: 10px; color: #8b8fa3; }
+
+  .footer {
+    text-align: center; font-size: 10px; color: #b0b5c6;
+    padding: 8px 0 0; line-height: 1.6;
+  }
+</style>
+</head>
+<body>
+
+<div class="card header">
+  <div class="date">2026年7月27日 周一</div>
+  <h1>焦点个股 + 板块轮动</h1>
+</div>
+
+<!-- Hero: 长鑫科技 -->
+<div class="card hero-card">
+  <div class="hero-top">
+    <div>
+      <div class="hero-code">688825.SH · 科创板</div>
+      <div class="hero-name">长鑫科技</div>
+      <div class="hero-sub">国产DRAM龙头 · 全球第四 · A股史上最大科技IPO</div>
+    </div>
+  </div>
+  <div class="hero-stats">
+    <div class="hero-stat">
+      <div class="val">+465.82%</div>
+      <div class="lbl">首日涨幅</div>
+    </div>
+    <div class="hero-stat">
+      <div class="val">1,412亿</div>
+      <div class="lbl">成交额</div>
+    </div>
+    <div class="hero-stat">
+      <div class="val">3.28万亿</div>
+      <div class="lbl">总市值</div>
+    </div>
+  </div>
+  <div class="hero-records">
+    <b>创多项A股纪录：</b>首只千亿成交个股 · 市值登顶A股第一 · 开盘市值超3.3万亿 · 发行价8.66元→收盘49.00元 · 换手率66.40% · 中一签盈利2万+
+  </div>
+</div>
+
+<!-- Sector Red List -->
+<div class="card">
+  <div class="section-title">领涨板块 TOP6</div>
+  <div class="sector-list">
+    <div class="sector-row rank-1">
+      <span class="sn">1 建筑材料</span><span class="chg up">+5.44%</span>
+    </div>
+    <div class="sector-row rank-1">
+      <span class="sn">2 综合</span><span class="chg up">+5.33%</span>
+    </div>
+    <div class="sector-row">
+      <span class="sn">3 美容护理</span><span class="chg up">+4.46%</span>
+    </div>
+    <div class="sector-row">
+      <span class="sn">4 社会服务</span><span class="chg up">+3.56%</span>
+    </div>
+    <div class="sector-row">
+      <span class="sn">5 电力设备</span><span class="chg up">+3.56%</span>
+    </div>
+    <div class="sector-row">
+      <span class="sn">6 电子/元件</span><span class="chg up">涨停8只</span>
+    </div>
+  </div>
+  <div style="margin-top:8px;font-size:11px;color:#8b8fa3;">
+    31个申万行业中29个上涨 · 建筑材料板块75/79只成分股收涨 · 玻璃玻纤/PCB/脑机接口活跃
+  </div>
+</div>
+
+<!-- Sector Black List -->
+<div class="card">
+  <div class="section-title">领跌/滞涨板块</div>
+  <div class="sector-list">
+    <div class="sector-row rank-1-d">
+      <span class="sn">1 石油石化</span><span class="chg down">-0.45%</span>
+    </div>
+    <div class="sector-row">
+      <span class="sn">2 煤炭</span><span class="chg down">-0.13%</span>
+    </div>
+  </div>
+  <div style="margin-top:6px;font-size:11px;color:#8b8fa3;">
+    仅2个行业下跌 · 国际油价回调拖累油气 · 中曼石油跌停
+  </div>
+</div>
+
+<!-- Lianban -->
+<div class="card">
+  <div class="section-title">连板梯队</div>
+  <div class="lianban-grid">
+    <div class="lb-item">
+      <div class="tier">5连板</div>
+      <div class="names">爱丽家居 · 长缆科技</div>
+      <div class="count">2只</div>
+    </div>
+    <div class="lb-item">
+      <div class="tier">4连板</div>
+      <div class="names">五洲医疗</div>
+      <div class="count">1只</div>
+    </div>
+    <div class="lb-item">
+      <div class="tier">3连板</div>
+      <div class="names">2只</div>
+      <div class="count">--</div>
+    </div>
+    <div class="lb-item">
+      <div class="tier">2连板</div>
+      <div class="names">3只</div>
+      <div class="count">--</div>
+    </div>
+  </div>
+  <div style="margin-top:8px;font-size:11px;color:#8b8fa3;text-align:center;">
+    高位连板从17只缩减至8只 · 百股涨停但情绪接力有所回落
+  </div>
+</div>
+
+<div class="footer">
+  数据来源: 证券时报 · 东方财富 · 中国证券报 · 超短笔记<br>
+  免责声明: 本复盘基于公开数据，仅供研究参考，不构成投资建议
+</div>
+
+</body>
+</html>

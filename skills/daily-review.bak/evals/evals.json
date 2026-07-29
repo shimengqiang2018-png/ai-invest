@@ -1,0 +1,17 @@
+{
+  "skill_name": "daily-review",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "复盘下今天的大盘，发抖音",
+      "expected_output": "3张1080×1920 PNG图片 + 3个HTML分屏文件，位于reports/目录，数据经脚本+WebSearch双重验证",
+      "files": []
+    },
+    {
+      "id": 2,
+      "prompt": "帮我看看今天A股什么情况，做个市场回顾，生成抖音能发的图",
+      "expected_output": "3张1080×1920 PNG图片 + 3个HTML分屏文件，完整复盘包含指数、情绪、板块、估值、逻辑、风险",
+      "files": []
+    }
+  ]
+}

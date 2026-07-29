@@ -1,0 +1,207 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=540, initial-scale=1">
+<meta name="color-scheme" content="only light">
+<style>
+  html { color-scheme: only light !important; }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    width: 540px;
+    min-height: 960px;
+    background: #f2f3f5;
+    font-family: "PingFang SC", "Microsoft YaHei", sans-serif;
+    font-size: 14px;
+    line-height: 1.5;
+    color: #1a1a2e;
+    padding: 36px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+  @media (prefers-color-scheme: dark) {
+    html, body, .card, .index-item, .hero, .hero-stat, .risk-item, .summary-box {
+      background-color: #ffffff !important;
+    }
+    html, body { background-color: #f2f3f5 !important; }
+    body, h1, .index-item .name, .hero-name, .sector-name { color: #1a1a2e !important; }
+  }
+  .card {
+    background: #ffffff;
+    border-radius: 12px;
+    padding: 16px 18px;
+  }
+  .header { text-align: center; padding: 20px 18px 16px; }
+  .header .date { font-size: 13px; color: #8b8fa3; margin-bottom: 4px; }
+  .header h1 { font-size: 20px; font-weight: 700; color: #1a1a2e; }
+  .section-title { font-size: 14px; font-weight: 700; color: #1a1a2e; margin-bottom: 10px; padding-left: 8px; border-left: 3px solid #e53e3e; }
+
+  /* PE bar */
+  .pe-row { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+  .pe-label { width: 60px; font-size: 12px; font-weight: 600; color: #1a1a2e; text-align: right; flex-shrink: 0; }
+  .pe-bar-wrap { flex: 1; position: relative; }
+  .pe-bar-bg { width: 100%; height: 22px; background: #f0f0f0; border-radius: 11px; overflow: hidden; }
+  .pe-bar-fill { height: 100%; border-radius: 11px; transition: width 0.3s; }
+  .pe-bar-fill.high { background: linear-gradient(90deg, #fbbf24, #e53e3e); }
+  .pe-bar-fill.mid { background: linear-gradient(90deg, #fbbf24, #f59e0b); }
+  .pe-bar-fill.low { background: linear-gradient(90deg, #34d399, #059669); }
+  .pe-info { width: 130px; font-size: 11px; color: #6b7280; flex-shrink: 0; }
+  .pe-info b { color: #1a1a2e; }
+  .pe-verdict { font-size: 11px; color: #8b8fa3; margin-top: 6px; text-align: center; padding-top: 6px; border-top: 1px solid #f0f0f0; }
+
+  /* Logic */
+  .logic-list { display: flex; flex-direction: column; gap: 8px; }
+  .logic-item { display: flex; gap: 8px; align-items: flex-start; }
+  .logic-num {
+    width: 22px; height: 22px; border-radius: 50%; background: #e53e3e;
+    color: #fff; font-size: 12px; font-weight: 700; text-align: center;
+    line-height: 22px; flex-shrink: 0; margin-top: 1px;
+  }
+  .logic-text { font-size: 12px; line-height: 1.5; }
+  .logic-text b { color: #1a1a2e; }
+  .logic-text .dim { color: #8b8fa3; font-size: 11px; }
+
+  /* Risk grid */
+  .risk-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .risk-item {
+    background: #fafbfc; border-radius: 10px; padding: 10px 12px;
+    border-left: 3px solid #f59e0b;
+  }
+  .risk-item .rtitle { font-size: 13px; font-weight: 700; color: #1a1a2e; margin-bottom: 2px; }
+  .risk-item .rdesc { font-size: 11px; color: #6b7280; line-height: 1.4; }
+
+  /* Summary */
+  .summary-box {
+    background: linear-gradient(135deg, #1a1a2e, #2d2d4a);
+    border-radius: 12px; padding: 16px 18px; color: #fff; text-align: center;
+  }
+  .summary-box .stitle { font-size: 13px; color: #a0a0b8; margin-bottom: 4px; }
+  .summary-box .stext { font-size: 15px; font-weight: 700; line-height: 1.6; }
+
+  .footer {
+    text-align: center; font-size: 10px; color: #b0b5c6;
+    padding: 8px 0 0; line-height: 1.6;
+  }
+</style>
+</head>
+<body>
+
+<div class="card header">
+  <div class="date">2026年7月27日 周一</div>
+  <h1>估值水位 + 逻辑 + 风险</h1>
+</div>
+
+<!-- PE Valuation -->
+<div class="card">
+  <div class="section-title">指数估值水位</div>
+
+  <div class="pe-row">
+    <div class="pe-label">沪深300</div>
+    <div class="pe-bar-wrap">
+      <div class="pe-bar-bg"><div class="pe-bar-fill high" style="width:86.6%"></div></div>
+    </div>
+    <div class="pe-info">PE 14.4 <b>分位86.6%</b></div>
+  </div>
+
+  <div class="pe-row">
+    <div class="pe-label">上证50</div>
+    <div class="pe-bar-wrap">
+      <div class="pe-bar-bg"><div class="pe-bar-fill high" style="width:84.9%"></div></div>
+    </div>
+    <div class="pe-info">PE 11.7 <b>分位84.9%</b></div>
+  </div>
+
+  <div class="pe-row">
+    <div class="pe-label">中证500</div>
+    <div class="pe-bar-wrap">
+      <div class="pe-bar-bg"><div class="pe-bar-fill high" style="width:85.3%"></div></div>
+    </div>
+    <div class="pe-info">PE 35.6 <b>分位85.3%</b></div>
+  </div>
+
+  <div class="pe-row">
+    <div class="pe-label">创业板指</div>
+    <div class="pe-bar-wrap">
+      <div class="pe-bar-bg"><div class="pe-bar-fill mid" style="width:55.3%"></div></div>
+    </div>
+    <div class="pe-info">PE 44.4 <b>分位55.3%</b></div>
+  </div>
+
+  <div class="pe-row">
+    <div class="pe-label">科创50</div>
+    <div class="pe-bar-wrap">
+      <div class="pe-bar-bg"><div class="pe-bar-fill high" style="width:98.5%"></div></div>
+    </div>
+    <div class="pe-info">PE 217.7 <b>分位98.5%</b></div>
+  </div>
+
+  <div class="pe-verdict">
+    整体判断：除创业板PE分位中等(55%)外，沪深300/上证50/中证500 PE分位均超84%，科创50接近历史最高 — <b style="color:#e53e3e;">大盘估值不便宜</b>
+  </div>
+</div>
+
+<!-- Logic -->
+<div class="card">
+  <div class="section-title">上涨逻辑</div>
+  <div class="logic-list">
+    <div class="logic-item">
+      <div class="logic-num">1</div>
+      <div class="logic-text">
+        <b>长鑫科技点燃科技情绪</b><br>
+        <span class="dim">国产DRAM龙头首日成交1,412亿，市值登顶A股，带动半导体、元件、电子板块全面走强。与字节签70亿美元大单传闻进一步激活产业链预期。</span>
+      </div>
+    </div>
+    <div class="logic-item">
+      <div class="logic-num">2</div>
+      <div class="logic-text">
+        <b>超跌后的强修复</b><br>
+        <span class="dim">上周五仅495家上涨，今日超5,100家上涨，属极端情绪后的均值回归。政策面暖风配合，市场自发性修复动能充足。</span>
+      </div>
+    </div>
+    <div class="logic-item">
+      <div class="logic-num">3</div>
+      <div class="logic-text">
+        <b>风险偏好回升 + 风格切换</b><br>
+        <span class="dim">成交放量至2.08万亿，中证1000(+3.33%)领涨、上证50(-0.20%)独绿，资金从大盘价值切换到小盘成长，弹性品种获追捧。</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Risk -->
+<div class="card">
+  <div class="section-title">风险提示</div>
+  <div class="risk-grid">
+    <div class="risk-item">
+      <div class="rtitle">估值偏高</div>
+      <div class="rdesc">沪深300/中证500 PE分位均超85%，安全边际不足。科创50 PE分位98.5%接近极值。</div>
+    </div>
+    <div class="risk-item">
+      <div class="rtitle">虹吸效应</div>
+      <div class="rdesc">长鑫科技单只成交1,412亿，占全市场约6.8%，对其他板块资金形成挤压。</div>
+    </div>
+    <div class="risk-item">
+      <div class="rtitle">连板断层</div>
+      <div class="rdesc">高位连板从17只降至8只，涨停宽度修复但高度回落，接力情绪存疑。</div>
+    </div>
+    <div class="risk-item">
+      <div class="rtitle">北向偏谨慎</div>
+      <div class="rdesc">龙虎榜层面北向净卖出5.32亿，外资对当前位置仍有分歧。</div>
+    </div>
+  </div>
+</div>
+
+<!-- Summary -->
+<div class="summary-box">
+  <div class="stitle">一句话总结</div>
+  <div class="stext">强修复日情绪高涨，但估值不便宜、资金有分化 —<br>短期情绪驱动占主导，基本面验证仍需时间。</div>
+</div>
+
+<div class="footer">
+  数据来源: 腾讯行情 · 蛋卷基金 · 东方财富 · 证券时报<br>
+  免责声明: 本复盘基于公开数据，仅供研究参考，不构成投资建议
+</div>
+
+</body>
+</html>

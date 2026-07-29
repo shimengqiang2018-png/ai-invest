@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="color-scheme" content="only light">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>A股复盘 ③</title>
+<style>
+  html { color-scheme: only light !important; }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body {
+    background: #f2f3f5 !important; color: #1a1a2e !important;
+    font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", sans-serif;
+    font-size: 14px; line-height: 1.5; padding: 36px;
+    max-width: 540px; margin: 0 auto;
+    -webkit-font-smoothing: antialiased;
+    display:flex; flex-direction:column; min-height:960px; justify-content:space-between;
+  }
+  .up { color:#e53e3e; } .down { color:#059669; }
+  .card {
+    background:#ffffff !important; border:1px solid #e5e7eb; border-radius:12px;
+    padding:16px 18px; margin-top:12px;
+  }
+  .card:first-child { margin-top:0; }
+  .card-title {
+    font-size:11px; font-weight:700; color:#9ca3af;
+    text-transform:uppercase; letter-spacing:1px; margin-bottom:12px;
+    display:flex; align-items:center; gap:6px;
+  }
+  .dot { width:6px; height:6px; border-radius:2px; display:inline-block; flex-shrink:0; }
+  .footer-text { text-align:center; font-size:9px; color:#d1d5db; }
+  .val-row { margin-bottom:10px; }
+  .val-row:last-child { margin-bottom:0; }
+  .val-header { display:flex; justify-content:space-between; align-items:baseline; font-size:12px; margin-bottom:3px; }
+  .val-header .idx { font-weight:600; color:#1f2937; min-width:60px; }
+  .val-header .detail { color:#6b7280; font-size:11px; }
+  .val-header .pct { font-weight:700; font-size:12px; }
+  .val-bar { height:8px; border-radius:4px; background:#e5e7eb; overflow:hidden; }
+  .val-bar-fill { height:100%; border-radius:4px; }
+  .val-note {
+    font-size:11px; color:#6b7280; margin-top:8px; padding:10px 12px;
+    background:#fef2f2; border-radius:8px; border-left:3px solid #e53e3e; line-height:1.5;
+  }
+  .logic-list { list-style:none; }
+  .logic-list li { padding:10px 0; border-bottom:1px solid #f3f4f6; display:flex; gap:10px; align-items:flex-start; }
+  .logic-list li:last-child { border-bottom:none; }
+  .logic-num {
+    background:#fee2e2; color:#e53e3e; width:22px; height:22px; border-radius:6px;
+    display:flex; align-items:center; justify-content:center;
+    font-size:12px; font-weight:800; flex-shrink:0;
+  }
+  .logic-text strong { font-size:14px; color:#111827; }
+  .logic-text .desc { font-size:11px; color:#6b7280; display:block; margin-top:2px; line-height:1.4; }
+  .risk-grid { display:grid; gap:8px; grid-template-columns:1fr 1fr; }
+  .risk-item {
+    background:#fef2f2 !important; border:1px solid #fecaca; border-radius:8px;
+    padding:10px 12px; font-size:11px; display:flex; gap:8px; align-items:flex-start;
+    color:#1f2937; line-height:1.4;
+  }
+  .risk-num {
+    background:#e53e3e; color:#ffffff; width:16px; height:16px; border-radius:50%;
+    display:flex; align-items:center; justify-content:center;
+    font-size:9px; font-weight:800; flex-shrink:0;
+  }
+  .summary-box {
+    background:#eff6ff !important; border:2px solid #93c5fd; border-radius:12px;
+    padding:14px 18px; text-align:center; font-size:15px; font-weight:700;
+    color:#1e40af; line-height:1.6; margin-top:12px;
+  }
+  @media (prefers-color-scheme: dark) {
+    html, body { background-color: #f2f3f5 !important; }
+    .card { background-color: #ffffff !important; }
+    body, .card, .val-header .idx { color: #1a1a2e !important; }
+    .risk-item { background-color: #fef2f2 !important; }
+    .summary-box { background-color: #eff6ff !important; color: #1e40af !important; }
+    .logic-num { background-color: #fee2e2 !important; }
+  }
+</style>
+</head>
+<body>
+
+<div class="card">
+  <div class="card-title"><span class="dot" style="background:#d97706"></span>指数估值水位 · 近10年PE分位 <span style="font-size:9px;color:#9ca3af">*</span></div>
+
+  <div class="val-row">
+    <div class="val-header">
+      <span class="idx">沪深300</span>
+      <span class="detail">PE 14.5 · PB 1.47 · 股息 2.47%</span>
+      <span class="pct" style="color:#e53e3e">88.3%</span>
+    </div>
+    <div class="val-bar"><div class="val-bar-fill" style="width:88.3%;background:linear-gradient(90deg,#fbbf24,#e53e3e)"></div></div>
+  </div>
+
+  <div class="val-row">
+    <div class="val-header">
+      <span class="idx">上证50</span>
+      <span class="detail">PE 11.7 · PB 1.27 · 股息 3.11%</span>
+      <span class="pct" style="color:#e53e3e">84.2%</span>
+    </div>
+    <div class="val-bar"><div class="val-bar-fill" style="width:84.2%;background:linear-gradient(90deg,#fbbf24,#e53e3e)"></div></div>
+  </div>
+
+  <div class="val-row">
+    <div class="val-header">
+      <span class="idx">中证500</span>
+      <span class="detail">PE 36.4 · PB 2.46 · 股息 1.37%</span>
+      <span class="pct" style="color:#e53e3e">85.8%</span>
+    </div>
+    <div class="val-bar"><div class="val-bar-fill" style="width:85.8%;background:linear-gradient(90deg,#fbbf24,#e53e3e)"></div></div>
+  </div>
+
+  <div class="val-row">
+    <div class="val-header">
+      <span class="idx">创业板指</span>
+      <span class="detail">PE 44.6 · PB 6.04 · 股息 0.87%</span>
+      <span class="pct" style="color:#d97706">55.8%</span>
+    </div>
+    <div class="val-bar"><div class="val-bar-fill" style="width:55.8%;background:#d97706"></div></div>
+  </div>
+
+  <div class="val-row">
+    <div class="val-header">
+      <span class="idx">科创50</span>
+      <span class="detail">PE 219.0 · PB 8.63 · 股息 0.19%</span>
+      <span class="pct" style="color:#e53e3e">98.5%</span>
+    </div>
+    <div class="val-bar"><div class="val-bar-fill" style="width:98.5%;background:#e53e3e"></div></div>
+  </div>
+
+  <div class="val-note">
+    ⚠️ 沪深300、上证50、中证500 PE分位均超<span style="color:#e53e3e;font-weight:700">84%</span>，科创50高达<span style="color:#e53e3e;font-weight:700">98.5%</span>。整体估值偏贵，上涨由<strong>流动性+情绪</strong>驱动，安全边际不足。
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-title"><span class="dot" style="background:#2563eb"></span>市场分化逻辑</div>
+  <ol class="logic-list">
+    <li>
+      <div class="logic-num">1</div>
+      <div class="logic-text">
+        <strong>全球AI恐慌传导</strong>
+        <span class="desc">英伟达跌4.99%丢掉全球股王，费城半导体跌2.23%，韩国KOSPI熔断跌6%。AI需求真实性遭质疑，A股算力链首当其冲。</span>
+      </div>
+    </li>
+    <li>
+      <div class="logic-num">2</div>
+      <div class="logic-text">
+        <strong>国产替代逻辑逆势强化</strong>
+        <span class="desc">国产DUV光刻机启动量产+EUV光源工程样机问世，ASML大跌反向刺激自主可控。资金从"全球AI链"切向"国产替代链"。</span>
+      </div>
+    </li>
+    <li>
+      <div class="logic-num">3</div>
+      <div class="logic-text">
+        <strong>高切低 + 虹吸反噬</strong>
+        <span class="desc">AI硬件3月来翻1.2倍，获利盘集中兑现。长鑫科技1411亿成交虹吸消退，资金回流大消费和红利蓝筹。建设银行创历史新高。</span>
+      </div>
+    </li>
+  </ol>
+</div>
+
+<div class="card" style="border-color:#fecaca">
+  <div class="card-title"><span class="dot" style="background:#e53e3e"></span>风险提示</div>
+  <div class="risk-grid">
+    <div class="risk-item">
+      <div class="risk-num">1</div>
+      <div>美股半导体若继续暴跌，A股AI算力有第二波踩踏风险</div>
+    </div>
+    <div class="risk-item">
+      <div class="risk-num">2</div>
+      <div>美国对华AI制裁加码，商务部已表态反制，贸易摩擦可能升级</div>
+    </div>
+    <div class="risk-item">
+      <div class="risk-num">3</div>
+      <div>光刻机概念短期情绪驱动，量产到业绩兑现周期长，追高风险大</div>
+    </div>
+    <div class="risk-item">
+      <div class="risk-num">4</div>
+      <div>主力半日净流出662亿，机构出货信号明确，下午盘仍有下行压力</div>
+    </div>
+  </div>
+</div>
+
+<div class="summary-box">
+  📢 指数暴跌≠全面恐慌，风格切换信号明确<br>
+  算力退潮 · 国产替代接力 · 红利防御占优<br>
+  <span style="font-size:12px;font-weight:500">下午盘关注北向资金动向，控制仓位等企稳信号</span>
+</div>
+
+<div class="footer-text">
+  * 估值数据来自 ashare_data.py（单源）· 板块数据来自 证券时报/21jingji &nbsp;|&nbsp; 仅供参考，不构成投资建议 &nbsp;|&nbsp; 3/3
+</div>
+</body>
+</html>

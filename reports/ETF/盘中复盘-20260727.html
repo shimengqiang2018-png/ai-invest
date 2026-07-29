@@ -1,0 +1,871 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>盘中复盘 · 2026.07.27 11:35</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=Noto+Sans+SC:wght@300;400;500;700;900&display=swap');
+
+  :root {
+    --bg: #09090b;
+    --bg-card: #13131b;
+    --bg-card-hover: #1a1a26;
+    --border: #1e1e2e;
+    --text: #e4e4e7;
+    --text-dim: #71717a;
+    --text-muted: #52525b;
+    --red: #ef4444;
+    --green: #22c55e;
+    --amber: #f59e0b;
+    --blue: #3b82f6;
+    --purple: #a855f7;
+    --cyan: #06b6d4;
+    --pink: #ec4899;
+    --gradient-1: linear-gradient(135deg, #f59e0b, #ef4444);
+    --gradient-2: linear-gradient(135deg, #22c55e, #06b6d4);
+    --gradient-3: linear-gradient(135deg, #3b82f6, #a855f7);
+    --gradient-4: linear-gradient(135deg, #ec4899, #f59e0b);
+    --glow-green: 0 0 20px rgba(34,197,94,0.3);
+    --glow-red: 0 0 20px rgba(239,68,68,0.3);
+    --glow-blue: 0 0 20px rgba(59,130,246,0.3);
+    --glow-amber: 0 0 20px rgba(245,158,11,0.3);
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    font-family: 'Inter', 'Noto Sans SC', -apple-system, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
+
+  /* ── Animated Background ── */
+  body::before {
+    content: '';
+    position: fixed;
+    top: -50%; left: -50%;
+    width: 200%; height: 200%;
+    background:
+      radial-gradient(circle at 15% 20%, rgba(59,130,246,0.06) 0%, transparent 50%),
+      radial-gradient(circle at 85% 30%, rgba(168,85,247,0.05) 0%, transparent 50%),
+      radial-gradient(circle at 50% 80%, rgba(236,72,153,0.04) 0%, transparent 50%),
+      radial-gradient(circle at 70% 60%, rgba(6,182,212,0.04) 0%, transparent 40%);
+    pointer-events: none;
+    z-index: 0;
+    animation: bgShift 20s ease-in-out infinite;
+  }
+
+  @keyframes bgShift {
+    0%, 100% { transform: translate(0,0) rotate(0deg); }
+    33% { transform: translate(1%,-0.5%) rotate(1deg); }
+    66% { transform: translate(-0.5%,1%) rotate(-1deg); }
+  }
+
+  .container { max-width: 1440px; margin: 0 auto; padding: 32px 24px; position: relative; z-index: 1; }
+
+  /* ── Header ── */
+  .header {
+    display: flex; justify-content: space-between; align-items: flex-start;
+    margin-bottom: 36px; flex-wrap: wrap; gap: 20px;
+  }
+  .header-left h1 {
+    font-size: 36px; font-weight: 900; letter-spacing: -1px;
+    background: linear-gradient(135deg, #e4e4e7 0%, #a1a1aa 100%);
+    -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+  .header-left .subtitle {
+    color: var(--text-dim); font-size: 14px; margin-top: 4px;
+    display: flex; align-items: center; gap: 12px;
+  }
+  .header-left .subtitle .dot {
+    width: 8px; height: 8px; border-radius: 50%; background: var(--green);
+    box-shadow: var(--glow-green); animation: pulse 2s ease-in-out infinite;
+  }
+  @keyframes pulse {
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50% { opacity: 0.5; transform: scale(1.3); }
+  }
+  .header-right {
+    display: flex; gap: 12px; flex-wrap: wrap;
+  }
+  .badge {
+    padding: 8px 16px; border-radius: 100px; font-size: 13px; font-weight: 600;
+    border: 1px solid var(--border); background: var(--bg-card);
+    display: flex; align-items: center; gap: 6px;
+  }
+  .badge.warn { border-color: rgba(245,158,11,0.3); color: var(--amber); }
+  .badge.info { border-color: rgba(59,130,246,0.3); color: var(--blue); }
+
+  /* ── Ticker Bar ── */
+  .ticker-bar {
+    display: flex; gap: 2px; margin-bottom: 36px; overflow-x: auto;
+    padding-bottom: 8px; scrollbar-width: none;
+  }
+  .ticker-bar::-webkit-scrollbar { display: none; }
+  .ticker-item {
+    flex: 1; min-width: 140px; padding: 18px 16px; border-radius: 16px;
+    background: var(--bg-card); border: 1px solid var(--border);
+    transition: all 0.3s ease; cursor: default; position: relative; overflow: hidden;
+  }
+  .ticker-item:hover { background: var(--bg-card-hover); transform: translateY(-2px); }
+  .ticker-item.up { border-bottom: 3px solid var(--green); }
+  .ticker-item.down { border-bottom: 3px solid var(--red); }
+  .ticker-item .ticker-name { font-size: 12px; color: var(--text-dim); margin-bottom: 4px; }
+  .ticker-item .ticker-price { font-size: 22px; font-weight: 800; letter-spacing: -0.5px; }
+  .ticker-item .ticker-chg {
+    font-size: 15px; font-weight: 700; margin-top: 2px;
+  }
+  .ticker-item.up .ticker-chg { color: var(--green); }
+  .ticker-item.down .ticker-chg { color: var(--red); }
+
+  /* ── Section ── */
+  .section {
+    margin-bottom: 28px;
+  }
+  .section-title {
+    font-size: 15px; font-weight: 700; text-transform: uppercase;
+    letter-spacing: 2px; color: var(--text-dim); margin-bottom: 16px;
+    display: flex; align-items: center; gap: 10px;
+  }
+  .section-title::after {
+    content: ''; flex: 1; height: 1px;
+    background: linear-gradient(90deg, var(--border), transparent);
+  }
+
+  /* ── Grid ── */
+  .grid-2 { display: grid; grid-template-columns: repeat(2, 1fr); gap: 20px; }
+  .grid-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; }
+  .grid-4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 20px; }
+
+  /* ── Card ── */
+  .card {
+    background: var(--bg-card); border: 1px solid var(--border);
+    border-radius: 20px; padding: 24px; transition: all 0.3s ease;
+    position: relative; overflow: hidden;
+  }
+  .card:hover { background: var(--bg-card-hover); }
+  .card.glow-green { box-shadow: var(--glow-green); }
+  .card.glow-red { box-shadow: var(--glow-red); }
+  .card.glow-amber { box-shadow: var(--glow-amber); }
+
+  /* ── Sentiment Card ── */
+  .sentiment-row {
+    display: flex; gap: 16px; margin-bottom: 28px;
+  }
+  .sentiment-card {
+    flex: 1; padding: 28px 24px; border-radius: 20px;
+    background: var(--bg-card); border: 1px solid var(--border);
+    text-align: center; transition: all 0.3s ease;
+  }
+  .sentiment-card:hover { transform: translateY(-3px); }
+  .sentiment-card .s-label { font-size: 13px; color: var(--text-dim); margin-bottom: 8px; }
+  .sentiment-card .s-value { font-size: 40px; font-weight: 900; letter-spacing: -2px; }
+  .sentiment-card .s-detail { font-size: 13px; color: var(--text-dim); margin-top: 4px; }
+
+  /* ── Sector Heatmap ── */
+  .sector-list { display: flex; flex-direction: column; gap: 6px; }
+  .sector-row {
+    display: flex; align-items: center; padding: 10px 16px;
+    border-radius: 12px; background: rgba(255,255,255,0.02);
+    transition: all 0.2s ease; cursor: default; gap: 12px;
+  }
+  .sector-row:hover { background: rgba(255,255,255,0.05); transform: translateX(4px); }
+  .sector-row .s-rank { width: 24px; font-size: 12px; color: var(--text-muted); text-align: center; }
+  .sector-row .s-name { flex: 1; font-weight: 600; font-size: 14px; }
+  .sector-row .s-price { font-size: 14px; color: var(--text-dim); min-width: 70px; text-align: right; }
+  .sector-row .s-chg {
+    font-weight: 700; font-size: 14px; min-width: 75px; text-align: right;
+    padding: 4px 10px; border-radius: 8px;
+  }
+  .sector-row .s-chg.up { color: var(--green); background: rgba(34,197,94,0.08); }
+  .sector-row .s-chg.down { color: var(--red); background: rgba(239,68,68,0.08); }
+  .sector-row .s-bar-wrap { flex: 2; height: 8px; background: rgba(255,255,255,0.05); border-radius: 4px; overflow: hidden; }
+  .sector-row .s-bar { height: 100%; border-radius: 4px; transition: width 0.8s ease; }
+  .sector-row .s-bar.up { background: linear-gradient(90deg, rgba(34,197,94,0.3), var(--green)); }
+  .sector-row .s-bar.down { background: linear-gradient(90deg, rgba(239,68,68,0.3), var(--red)); }
+
+  /* ── Valuation Gauge ── */
+  .val-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+  .val-item {
+    padding: 18px; border-radius: 16px; background: var(--bg-card);
+    border: 1px solid var(--border); text-align: center;
+  }
+  .val-item .v-name { font-size: 13px; color: var(--text-dim); margin-bottom: 8px; }
+  .val-item .v-pe { font-size: 22px; font-weight: 800; }
+  .val-item .v-pb { font-size: 13px; color: var(--text-dim); margin-bottom: 8px; }
+  .val-gauge {
+    width: 100%; height: 6px; border-radius: 3px; margin-top: 8px;
+    background: linear-gradient(90deg, #22c55e, #84cc16, #f59e0b, #f97316, #ef4444);
+    position: relative; overflow: visible;
+  }
+  .val-gauge-dot {
+    position: absolute; top: -4px; width: 14px; height: 14px;
+    border-radius: 50%; border: 2px solid white; transform: translateX(-50%);
+    box-shadow: 0 0 10px rgba(255,255,255,0.4);
+  }
+  .val-labels { display: flex; justify-content: space-between; font-size: 10px; color: var(--text-muted); margin-top: 4px; }
+
+  /* ── Structure Analysis ── */
+  .structure-cards { display: grid; grid-template-columns: repeat(2, 1fr); gap: 16px; }
+  .struct-card {
+    padding: 20px; border-radius: 16px; border: 1px solid var(--border);
+    background: var(--bg-card);
+  }
+  .struct-card .st-title { font-size: 13px; font-weight: 600; color: var(--text-dim); margin-bottom: 10px; letter-spacing: 1px; }
+  .struct-card .st-body { font-size: 14px; line-height: 1.7; color: var(--text); }
+  .struct-card .st-highlight { font-weight: 700; padding: 2px 6px; border-radius: 4px; }
+  .struct-card .st-highlight.red { color: var(--red); background: rgba(239,68,68,0.1); }
+  .struct-card .st-highlight.green { color: var(--green); background: rgba(34,197,94,0.1); }
+  .struct-card .st-highlight.amber { color: var(--amber); background: rgba(245,158,11,0.1); }
+
+  /* ── Alert Panel ── */
+  .alert-panel {
+    display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin-bottom: 28px;
+  }
+  .alert-item {
+    padding: 20px; border-radius: 16px; border: 1px solid; display: flex; gap: 14px; align-items: flex-start;
+  }
+  .alert-item.warning { border-color: rgba(245,158,11,0.3); background: rgba(245,158,11,0.05); }
+  .alert-item.danger { border-color: rgba(239,68,68,0.3); background: rgba(239,68,68,0.05); }
+  .alert-item.info { border-color: rgba(59,130,246,0.3); background: rgba(59,130,246,0.05); }
+  .alert-icon { font-size: 24px; flex-shrink: 0; }
+  .alert-text .at-title { font-weight: 700; font-size: 13px; margin-bottom: 4px; }
+  .alert-text .at-desc { font-size: 12px; color: var(--text-dim); line-height: 1.5; }
+
+  /* ── Flow/Volume Bars ── */
+  .flow-item {
+    display: flex; align-items: center; gap: 10px; padding: 8px 0;
+    border-bottom: 1px solid rgba(255,255,255,0.03);
+  }
+  .flow-code { font-size: 13px; font-weight: 600; min-width: 70px; color: var(--text-dim); }
+  .flow-name { font-size: 13px; min-width: 70px; }
+  .flow-bar-wrap { flex: 1; height: 6px; background: rgba(255,255,255,0.05); border-radius: 3px; overflow: hidden; }
+  .flow-bar { height: 100%; border-radius: 3px; background: var(--gradient-3); }
+  .flow-amt { font-size: 12px; color: var(--text-dim); min-width: 80px; text-align: right; }
+
+  /* ── Footer ── */
+  .footer {
+    margin-top: 40px; padding-top: 20px; border-top: 1px solid var(--border);
+    display: flex; justify-content: space-between; align-items: center;
+    font-size: 11px; color: var(--text-muted); flex-wrap: wrap; gap: 8px;
+  }
+  .footer a { color: var(--blue); text-decoration: none; }
+
+  /* ── Divergence Callout ── */
+  .divergence-callout {
+    margin-bottom: 28px; padding: 20px 24px; border-radius: 16px;
+    background: linear-gradient(135deg, rgba(168,85,247,0.08), rgba(236,72,153,0.08));
+    border: 1px solid rgba(168,85,247,0.2); display: flex; align-items: center; gap: 16px;
+  }
+  .divergence-callout .dc-icon { font-size: 32px; flex-shrink: 0; }
+  .divergence-callout .dc-text .dc-title { font-weight: 800; font-size: 16px; margin-bottom: 4px; }
+  .divergence-callout .dc-text .dc-desc { font-size: 13px; color: var(--text-dim); line-height: 1.5; }
+  .dc-numbers { display: flex; gap: 24px; margin-left: auto; flex-shrink: 0; }
+  .dc-num { text-align: center; }
+  .dc-num .v { font-size: 24px; font-weight: 900; }
+  .dc-num .v.up { color: var(--green); }
+  .dc-num .v.down { color: var(--red); }
+  .dc-num .l { font-size: 11px; color: var(--text-dim); margin-top: 2px; }
+
+  /* ── Responsive ── */
+  @media (max-width: 1024px) {
+    .grid-2, .grid-3 { grid-template-columns: 1fr; }
+    .grid-4 { grid-template-columns: repeat(2, 1fr); }
+    .val-grid { grid-template-columns: repeat(2, 1fr); }
+    .alert-panel { grid-template-columns: 1fr; }
+    .sentiment-row { flex-direction: column; }
+    .structure-cards { grid-template-columns: 1fr; }
+    .dc-numbers { display: none; }
+  }
+  @media (max-width: 640px) {
+    .grid-4 { grid-template-columns: 1fr; }
+    .val-grid { grid-template-columns: 1fr; }
+    .ticker-bar { flex-wrap: wrap; }
+    .ticker-item { min-width: 100px; }
+  }
+</style>
+</head>
+<body>
+
+<div class="container">
+
+  <!-- ═══════════ HEADER ═══════════ -->
+  <div class="header">
+    <div class="header-left">
+      <h1>盘中复盘</h1>
+      <div class="subtitle">
+        <span class="dot"></span> 实时数据 · 2026年7月27日 11:35 CST
+        <span style="margin-left:8px;opacity:0.5">|</span>
+        <span>数据源: 腾讯行情 · 蛋卷基金 · 东方财富</span>
+      </div>
+    </div>
+    <div class="header-right">
+      <div class="badge warn">⚠️ 上证50逆跌 -0.83%</div>
+      <div class="badge info">🔥 中证1000领涨 +2.13%</div>
+      <div class="badge info">📊 剪刀差 2.96%</div>
+    </div>
+  </div>
+
+  <!-- ═══════════ DIVERGENCE CALLOUT ═══════════ -->
+  <div class="divergence-callout">
+    <div class="dc-icon">⚡</div>
+    <div class="dc-text">
+      <div class="dc-title">极致分化：大弱小强，剪刀差接近 3%</div>
+      <div class="dc-desc">上证50被银行保险拖累逆势下跌，中证1000获资金涌入暴涨。这是典型的"卖大买小"风格切换日，机构从确定性溢价转向弹性溢价。</div>
+    </div>
+    <div class="dc-numbers">
+      <div class="dc-num"><div class="v down">-0.83%</div><div class="l">上证50</div></div>
+      <div class="dc-num"><div class="v" style="color:var(--text-dim)">VS</div></div>
+      <div class="dc-num"><div class="v up">+2.13%</div><div class="l">中证1000</div></div>
+    </div>
+  </div>
+
+  <!-- ═══════════ TICKER BAR ═══════════ -->
+  <div class="section">
+    <div class="section-title">📈 核心指数</div>
+    <div class="ticker-bar">
+
+      <div class="ticker-item up">
+        <div class="ticker-name">上证指数</div>
+        <div class="ticker-price">3,829</div>
+        <div class="ticker-chg">+0.40%</div>
+      </div>
+
+      <div class="ticker-item up">
+        <div class="ticker-name">深证成指</div>
+        <div class="ticker-price">13,969</div>
+        <div class="ticker-chg">+1.41%</div>
+      </div>
+
+      <div class="ticker-item up">
+        <div class="ticker-name">创业板指</div>
+        <div class="ticker-price">3,535</div>
+        <div class="ticker-chg">+1.55%</div>
+      </div>
+
+      <div class="ticker-item up">
+        <div class="ticker-name">沪深300</div>
+        <div class="ticker-price">4,661</div>
+        <div class="ticker-chg">+0.25%</div>
+      </div>
+
+      <div class="ticker-item down">
+        <div class="ticker-name">上证50 ⚠️</div>
+        <div class="ticker-price">2,932</div>
+        <div class="ticker-chg">-0.83%</div>
+      </div>
+
+      <div class="ticker-item up">
+        <div class="ticker-name">中证500</div>
+        <div class="ticker-price">7,623</div>
+        <div class="ticker-chg">+1.19%</div>
+      </div>
+
+      <div class="ticker-item down">
+        <div class="ticker-name">科创50</div>
+        <div class="ticker-price">1,779</div>
+        <div class="ticker-chg">-0.47%</div>
+      </div>
+
+      <div class="ticker-item up">
+        <div class="ticker-name">中证1000 🔥</div>
+        <div class="ticker-price">7,145</div>
+        <div class="ticker-chg">+2.13%</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════ SENTIMENT DASH ═══════════ -->
+  <div class="section">
+    <div class="section-title">🎯 市场情绪仪表盘</div>
+    <div class="sentiment-row">
+      <div class="sentiment-card" style="border-left: 3px solid var(--green);">
+        <div class="s-label">上涨 vs 下跌指数</div>
+        <div class="s-value" style="color:var(--green);">6 : 2</div>
+        <div class="s-detail">8大指数中6个上涨</div>
+      </div>
+      <div class="sentiment-card" style="border-left: 3px solid var(--amber);">
+        <div class="s-label">大小盘剪刀差</div>
+        <div class="s-value" style="color:var(--amber);">2.96%</div>
+        <div class="s-detail">中证1000 - 上证50</div>
+      </div>
+      <div class="sentiment-card" style="border-left: 3px solid var(--purple);">
+        <div class="s-label">最强板块</div>
+        <div class="s-value" style="font-size:24px;color:var(--purple);">恒生互联</div>
+        <div class="s-detail" style="color:var(--green);">+2.68%</div>
+      </div>
+      <div class="sentiment-card" style="border-left: 3px solid var(--red);">
+        <div class="s-label">最弱板块</div>
+        <div class="s-value" style="font-size:24px;color:var(--red);">芯片ETF</div>
+        <div class="s-detail" style="color:var(--red);">-1.24%</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════ SECTOR HEATMAP ═══════════ -->
+  <div class="grid-2">
+    <div class="card">
+      <div class="section-title" style="margin-top:0;">🔥 板块热力榜</div>
+      <div class="sector-list">
+
+        <div class="sector-row">
+          <span class="s-rank">1</span>
+          <span class="s-name">恒生互联</span>
+          <span class="s-price">0.383</span>
+          <span class="s-chg up">+2.68%</span>
+          <span class="s-bar-wrap"><span class="s-bar up" style="width:100%"></span></span>
+        </div>
+
+        <div class="sector-row">
+          <span class="s-rank">2</span>
+          <span class="s-name">中概互联</span>
+          <span class="s-price">1.089</span>
+          <span class="s-chg up">+2.45%</span>
+          <span class="s-bar-wrap"><span class="s-bar up" style="width:91%"></span></span>
+        </div>
+
+        <div class="sector-row">
+          <span class="s-rank">3</span>
+          <span class="s-name">新能源车</span>
+          <span class="s-price">1.600</span>
+          <span class="s-chg up">+2.43%</span>
+          <span class="s-bar-wrap"><span class="s-bar up" style="width:90%"></span></span>
+        </div>
+
+        <div class="sector-row">
+          <span class="s-rank">4</span>
+          <span class="s-name">中证1000</span>
+          <span class="s-price">2.895</span>
+          <span class="s-chg up">+2.22%</span>
+          <span class="s-bar-wrap"><span class="s-bar up" style="width:83%"></span></span>
+        </div>
+
+        <div class="sector-row">
+          <span class="s-rank">5</span>
+          <span class="s-name">恒生科技</span>
+          <span class="s-price">0.596</span>
+          <span class="s-chg up">+1.88%</span>
+          <span class="s-bar-wrap"><span class="s-bar up" style="width:70%"></span></span>
+        </div>
+
+        <div class="sector-row">
+          <span class="s-rank">6</span>
+          <span class="s-name">军工ETF</span>
+          <span class="s-price">1.093</span>
+          <span class="s-chg up">+1.49%</span>
+          <span class="s-bar-wrap"><span class="s-bar up" style="width:56%"></span></span>
+        </div>
+
+        <div class="sector-row">
+          <span class="s-rank">7</span>
+          <span class="s-name">光伏ETF</span>
+          <span class="s-price">0.823</span>
+          <span class="s-chg up">+1.48%</span>
+          <span class="s-bar-wrap"><span class="s-bar up" style="width:55%"></span></span>
+        </div>
+
+        <div class="sector-row">
+          <span class="s-rank">8</span>
+          <span class="s-name">医药ETF</span>
+          <span class="s-price">0.370</span>
+          <span class="s-chg up">+1.37%</span>
+          <span class="s-bar-wrap"><span class="s-bar up" style="width:51%"></span></span>
+        </div>
+
+        <div class="sector-row">
+          <span class="s-rank">9</span>
+          <span class="s-name">创业板</span>
+          <span class="s-price">3.555</span>
+          <span class="s-chg up">+1.34%</span>
+          <span class="s-bar-wrap"><span class="s-bar up" style="width:50%"></span></span>
+        </div>
+
+        <div class="sector-row">
+          <span class="s-rank">10</span>
+          <span class="s-name">恒生ETF</span>
+          <span class="s-price">1.486</span>
+          <span class="s-chg up">+1.23%</span>
+          <span class="s-bar-wrap"><span class="s-bar up" style="width:46%"></span></span>
+        </div>
+
+        <div class="sector-row">
+          <span class="s-rank">11</span>
+          <span class="s-name">黄金ETF</span>
+          <span class="s-price">8.477</span>
+          <span class="s-chg up">+1.10%</span>
+          <span class="s-bar-wrap"><span class="s-bar up" style="width:41%"></span></span>
+        </div>
+
+        <div class="sector-row">
+          <span class="s-rank">12</span>
+          <span class="s-name">酒ETF</span>
+          <span class="s-price">0.420</span>
+          <span class="s-chg up">+0.96%</span>
+          <span class="s-bar-wrap"><span class="s-bar up" style="width:36%"></span></span>
+        </div>
+
+        <div class="sector-row">
+          <span class="s-rank">13</span>
+          <span class="s-name">纳指ETF</span>
+          <span class="s-price">2.113</span>
+          <span class="s-chg up">+0.43%</span>
+          <span class="s-bar-wrap"><span class="s-bar up" style="width:16%"></span></span>
+        </div>
+
+        <div class="sector-row">
+          <span class="s-rank">14</span>
+          <span class="s-name">沪深300</span>
+          <span class="s-price">4.719</span>
+          <span class="s-chg up">+0.38%</span>
+          <span class="s-bar-wrap"><span class="s-bar up" style="width:14%"></span></span>
+        </div>
+
+        <div class="sector-row">
+          <span class="s-rank">15</span>
+          <span class="s-name">证券ETF</span>
+          <span class="s-price">1.100</span>
+          <span class="s-chg up">+0.09%</span>
+          <span class="s-bar-wrap"><span class="s-bar up" style="width:3%"></span></span>
+        </div>
+
+        <div class="sector-row">
+          <span class="s-rank">16</span>
+          <span class="s-name">上证50</span>
+          <span class="s-price">3.039</span>
+          <span class="s-chg down">-0.36%</span>
+          <span class="s-bar-wrap"><span class="s-bar down" style="width:13%"></span></span>
+        </div>
+
+        <div class="sector-row">
+          <span class="s-rank">17</span>
+          <span class="s-name">科创50</span>
+          <span class="s-price">1.875</span>
+          <span class="s-chg down">-0.53%</span>
+          <span class="s-bar-wrap"><span class="s-bar down" style="width:20%"></span></span>
+        </div>
+
+        <div class="sector-row">
+          <span class="s-rank">18</span>
+          <span class="s-name">芯片ETF</span>
+          <span class="s-price">1.195</span>
+          <span class="s-chg down">-1.24%</span>
+          <span class="s-bar-wrap"><span class="s-bar down" style="width:46%"></span></span>
+        </div>
+      </div>
+    </div>
+
+    <!-- ═══════════ VOLUME LEADERBOARD ═══════════ -->
+    <div class="card">
+      <div class="section-title" style="margin-top:0;">💧 成交额 TOP10（万元）</div>
+
+      <div class="flow-item">
+        <span class="flow-code">科创50</span><span class="flow-name">588000</span>
+        <span class="flow-bar-wrap"><span class="flow-bar" style="width:100%"></span></span>
+        <span class="flow-amt">443,826</span>
+      </div>
+
+      <div class="flow-item">
+        <span class="flow-code">创业板</span><span class="flow-name">159915</span>
+        <span class="flow-bar-wrap"><span class="flow-bar" style="width:88%"></span></span>
+        <span class="flow-amt">390,478</span>
+      </div>
+
+      <div class="flow-item">
+        <span class="flow-code">中证1000</span><span class="flow-name">512100</span>
+        <span class="flow-bar-wrap"><span class="flow-bar" style="width:79%"></span></span>
+        <span class="flow-amt">349,904</span>
+      </div>
+
+      <div class="flow-item">
+        <span class="flow-code">沪深300</span><span class="flow-name">510300</span>
+        <span class="flow-bar-wrap"><span class="flow-bar" style="width:55%"></span></span>
+        <span class="flow-amt">245,428</span>
+      </div>
+
+      <div class="flow-item">
+        <span class="flow-code">中概互联</span><span class="flow-name">513050</span>
+        <span class="flow-bar-wrap"><span class="flow-bar" style="width:36%"></span></span>
+        <span class="flow-amt">159,145</span>
+      </div>
+
+      <div class="flow-item">
+        <span class="flow-code">恒生科技</span><span class="flow-name">513180</span>
+        <span class="flow-bar-wrap"><span class="flow-bar" style="width:34%"></span></span>
+        <span class="flow-amt">152,749</span>
+      </div>
+
+      <div class="flow-item">
+        <span class="flow-code">恒生互联</span><span class="flow-name">513330</span>
+        <span class="flow-bar-wrap"><span class="flow-bar" style="width:33%"></span></span>
+        <span class="flow-amt">145,323</span>
+      </div>
+
+      <div class="flow-item">
+        <span class="flow-code">黄金ETF</span><span class="flow-name">518880</span>
+        <span class="flow-bar-wrap"><span class="flow-bar" style="width:24%"></span></span>
+        <span class="flow-amt">108,495</span>
+      </div>
+
+      <div class="flow-item">
+        <span class="flow-code">上证50</span><span class="flow-name">510050</span>
+        <span class="flow-bar-wrap"><span class="flow-bar" style="width:21%"></span></span>
+        <span class="flow-amt">95,237</span>
+      </div>
+
+      <div class="flow-item">
+        <span class="flow-code">证券ETF</span><span class="flow-name">512880</span>
+        <span class="flow-bar-wrap"><span class="flow-bar" style="width:21%"></span></span>
+        <span class="flow-amt">93,738</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════ VALUATION DASHBOARD ═══════════ -->
+  <div class="section">
+    <div class="section-title">📐 估值温度计</div>
+    <div class="val-grid">
+
+      <div class="val-item">
+        <div class="v-name">沪深300</div>
+        <div class="v-pe" style="color:var(--amber);">PE 14.4</div>
+        <div class="v-pb">PB 1.46 · 分位 86.6%</div>
+        <div class="val-gauge">
+          <div class="val-gauge-dot" style="left:86.6%; background:var(--amber);"></div>
+        </div>
+        <div class="val-labels"><span>低估</span><span>合理</span><span>偏贵</span><span>昂贵</span><span>泡沫</span></div>
+        <div style="font-size:11px;color:var(--amber);margin-top:6px;">⚠️ 偏贵区间</div>
+      </div>
+
+      <div class="val-item">
+        <div class="v-name">上证50</div>
+        <div class="v-pe" style="color:var(--amber);">PE 11.7</div>
+        <div class="v-pb">PB 1.27 · 分位 84.9%</div>
+        <div class="val-gauge">
+          <div class="val-gauge-dot" style="left:84.9%; background:var(--amber);"></div>
+        </div>
+        <div class="val-labels"><span>低估</span><span>合理</span><span>偏贵</span><span>昂贵</span><span>泡沫</span></div>
+        <div style="font-size:11px;color:var(--amber);margin-top:6px;">⚠️ 偏贵区间 · 股息3.1%</div>
+      </div>
+
+      <div class="val-item">
+        <div class="v-name">中证500</div>
+        <div class="v-pe" style="color:var(--red);">PE 35.6</div>
+        <div class="v-pb">PB 2.40 · 分位 85.3%</div>
+        <div class="val-gauge">
+          <div class="val-gauge-dot" style="left:85.3%; background:var(--red);"></div>
+        </div>
+        <div class="val-labels"><span>低估</span><span>合理</span><span>偏贵</span><span>昂贵</span><span>泡沫</span></div>
+        <div style="font-size:11px;color:var(--red);margin-top:6px;">🔴 偏贵</div>
+      </div>
+
+      <div class="val-item">
+        <div class="v-name">创业板指</div>
+        <div class="v-pe" style="color:var(--amber);">PE 44.4</div>
+        <div class="v-pb">PB 5.92 · 分位 55.3%</div>
+        <div class="val-gauge">
+          <div class="val-gauge-dot" style="left:55.3%; background:var(--amber);"></div>
+        </div>
+        <div class="val-labels"><span>低估</span><span>合理</span><span>偏贵</span><span>昂贵</span><span>泡沫</span></div>
+        <div style="font-size:11px;color:var(--amber);margin-top:6px;">🟡 中等</div>
+      </div>
+
+      <div class="val-item">
+        <div class="v-name">科创50</div>
+        <div class="v-pe" style="color:var(--red);">PE 217.7</div>
+        <div class="v-pb">PB 8.58 · 分位 98.5%</div>
+        <div class="val-gauge">
+          <div class="val-gauge-dot" style="left:98.5%; background:var(--red);"></div>
+        </div>
+        <div class="val-labels"><span>低估</span><span>合理</span><span>偏贵</span><span>昂贵</span><span>泡沫</span></div>
+        <div style="font-size:11px;color:var(--red);margin-top:6px;">🔴 极度昂贵</div>
+      </div>
+
+      <div class="val-item">
+        <div class="v-name">中证1000</div>
+        <div class="v-pe" style="color:var(--green);">PE 42.1</div>
+        <div class="v-pb">PB 2.25 · 分位 33.1%</div>
+        <div class="val-gauge">
+          <div class="val-gauge-dot" style="left:33.1%; background:var(--green);"></div>
+        </div>
+        <div class="val-labels"><span>低估</span><span>合理</span><span>偏贵</span><span>昂贵</span><span>泡沫</span></div>
+        <div style="font-size:11px;color:var(--green);margin-top:6px;">🟢 PB分位仅33% · 相对便宜</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════ MARKET STRUCTURE ═══════════ -->
+  <div class="section">
+    <div class="section-title">🔍 盘面结构分析</div>
+    <div class="structure-cards">
+      <div class="struct-card">
+        <div class="st-title">🟢 三条做多主线</div>
+        <div class="st-body">
+          <p><span class="st-highlight green">港股科技反弹</span> — 恒生互联+2.68%、中概互联+2.45%、恒生科技+1.88%，三者包揽涨幅前三。南下资金持续流入+海外中概修复共振。</p>
+          <p style="margin-top:8px;"><span class="st-highlight green">新能源产业链</span> — 新能源车+2.43%、光伏+1.48%，政策预期+行业数据催化。新能源车是本轮成长股反弹的旗手。</p>
+          <p style="margin-top:8px;"><span class="st-highlight green">小盘普涨</span> — 中证1000 +2.13%领涨宽基，军工+1.49%、医药+1.37%跟涨，属超跌反弹+流动性驱动的系统性修复。</p>
+        </div>
+      </div>
+      <div class="struct-card">
+        <div class="st-title">🔴 三条拖累力量</div>
+        <div class="st-body">
+          <p><span class="st-highlight red">大金融回调</span> — 上证50 -0.83%唯一下跌宽基，银行保险遭机构减配。证券ETF仅+0.09%，毫无弹性。</p>
+          <p style="margin-top:8px;"><span class="st-highlight red">半导体逆跌</span> — 芯片ETF -1.24%、科创50 -0.47%，在全市场普涨日独跌，前期获利盘出逃明显。盘中芯片ETF振幅达6%（1.152-1.226），多空博弈激烈。</p>
+          <p style="margin-top:8px;"><span class="st-highlight red">权重失血</span> — 上证50成交仅95亿，仅为科创50的1/5、创业板的1/4。大票流动性被中小盘虹吸。</p>
+        </div>
+      </div>
+      <div class="struct-card">
+        <div class="st-title">⚠️ 关键矛盾与风险</div>
+        <div class="st-body">
+          <p><span class="st-highlight amber">风格切换真伪</span> — 中证1000近5日+2.91%但20日跌幅-16.55%，今日大涨属超跌反弹。能否持续取决于：① 上证50能否企稳 ② 成交量是否继续放大 ③ 是否有增量政策催化。</p>
+          <p style="margin-top:8px;"><span class="st-highlight amber">芯片半导体结构破位</span> — 成长股普涨日芯片独跌，若明日不能修复，可能从"技术调整"升级为"趋势反转"，拖累整个科创板。</p>
+          <p style="margin-top:8px;"><span class="st-highlight amber">汇率与外资</span> — USD/CNY 6.78相对稳定，但北向资金数据缺失。如果北向持续流出，上证50压力会加剧。</p>
+        </div>
+      </div>
+      <div class="struct-card">
+        <div class="st-title">📋 交易层面判断</div>
+        <div class="st-body">
+          <p><span class="st-highlight green">成交量健康</span> — 科创50 44亿、创业板39亿、中证1000 35亿，多个ETF成交超百亿级别。非无量空拉，市场参与度高。</p>
+          <p style="margin-top:8px;"><span class="st-highlight amber">超跌反弹性质</span> — 中证1000前期跌幅深（20日-16.55%），创业板20日-15.72%，当前属技术修复。追高需谨慎，建议等回踩确认。</p>
+          <p style="margin-top:8px;"><span class="st-highlight green">黄金避险升温</span> — 黄金ETF +1.10%，近5日+2.07%，在风险资产反弹的同时黄金同步上涨。说明部分资金仍在配置防御资产，市场并非单边看多。</p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════ ALERT PANEL ═══════════ -->
+  <div class="section">
+    <div class="section-title">🚨 关键警示</div>
+    <div class="alert-panel">
+      <div class="alert-item warning">
+        <div class="alert-icon">⚠️</div>
+        <div class="alert-text">
+          <div class="at-title">上证50 逆势破位</div>
+          <div class="at-desc">上证50独跌-0.83%，盘中最低3.028，距3.000整数关口仅一步之遥。若破位可能触发程序化止损盘，拖累上证指数下行。</div>
+        </div>
+      </div>
+      <div class="alert-item danger">
+        <div class="alert-icon">🔴</div>
+        <div class="alert-text">
+          <div class="at-title">芯片ETF 逆势放量下跌</div>
+          <div class="at-desc">在全市场普涨日逆势-1.24%，盘中振幅超6%，成交3,505万元。前期涨幅过大品种获利了结信号明确，短期回避。</div>
+        </div>
+      </div>
+      <div class="alert-item info">
+        <div class="alert-icon">📊</div>
+        <div class="alert-text">
+          <div class="at-title">科创50 PE 98.5%分位</div>
+          <div class="at-desc">科创50 PE 217.7 处于历史极度昂贵区间。虽然成长股不看PE，但在无风险利率上行的环境下，超高估值标的承压最大。</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════ GRID TRADING NOTE ═══════════ -->
+  <div class="section">
+    <div class="section-title">🤖 网格交易盘中提示</div>
+    <div class="grid-3">
+      <div class="card">
+        <div style="display:flex;justify-content:space-between;align-items:center;">
+          <div>
+            <div style="font-size:12px;color:var(--text-dim);">恒生科技 513180</div>
+            <div style="font-size:24px;font-weight:800;">0.596 <span style="font-size:15px;color:var(--green);">+1.88%</span></div>
+          </div>
+          <div style="font-size:32px;">📈</div>
+        </div>
+        <div style="margin-top:12px;padding:10px;border-radius:8px;background:rgba(245,158,11,0.08);font-size:13px;color:var(--amber);">
+          ⚠️ 今日涨幅较大，关注是否触及上方卖盘触发价。基准价0.595，卖盘第1档约0.616（+3.5%），当前距卖盘约3.2%。
+        </div>
+      </div>
+      <div class="card">
+        <div style="display:flex;justify-content:space-between;align-items:center;">
+          <div>
+            <div style="font-size:12px;color:var(--text-dim);">证券ETF 512880</div>
+            <div style="font-size:24px;font-weight:800;">1.100 <span style="font-size:15px;color:var(--green);">+0.09%</span></div>
+          </div>
+          <div style="font-size:32px;">➡️</div>
+        </div>
+        <div style="margin-top:12px;padding:10px;border-radius:8px;background:rgba(59,130,246,0.08);font-size:13px;color:var(--blue);">
+          ℹ️ 横盘整理，全天窄幅波动（1.087-1.104），距买卖触发价均较远。网格正常运行，无需操作。
+        </div>
+      </div>
+      <div class="card">
+        <div style="display:flex;justify-content:space-between;align-items:center;">
+          <div>
+            <div style="font-size:12px;color:var(--text-dim);">酒ETF 512690</div>
+            <div style="font-size:24px;font-weight:800;">0.420 <span style="font-size:15px;color:var(--green);">+0.96%</span></div>
+          </div>
+          <div style="font-size:32px;">🍷</div>
+        </div>
+        <div style="margin-top:12px;padding:10px;border-radius:8px;background:rgba(34,197,94,0.08);font-size:13px;color:var(--green);">
+          ✅ 温和上涨，基准价0.425，距买盘第1档约-2%，距卖盘约+3%。当前价格在网格中枢附近，正常运转。
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════ FX & MACRO ═══════════ -->
+  <div class="grid-3" style="margin-bottom:28px;">
+    <div class="card" style="text-align:center;">
+      <div style="font-size:12px;color:var(--text-dim);margin-bottom:4px;">USD/CNY</div>
+      <div style="font-size:32px;font-weight:900;">6.78</div>
+      <div style="font-size:12px;color:var(--text-dim);">在岸人民币</div>
+    </div>
+    <div class="card" style="text-align:center;">
+      <div style="font-size:12px;color:var(--text-dim);margin-bottom:4px;">USD/HKD</div>
+      <div style="font-size:32px;font-weight:900;">7.84</div>
+      <div style="font-size:12px;color:var(--text-dim);">联系汇率制</div>
+    </div>
+    <div class="card" style="text-align:center;">
+      <div style="font-size:12px;color:var(--text-dim);margin-bottom:4px;">HKD/CNY</div>
+      <div style="font-size:32px;font-weight:900;">0.8648</div>
+      <div style="font-size:12px;color:var(--text-dim);">港币兑人民币</div>
+    </div>
+  </div>
+
+  <!-- ═══════════ OPERATIONAL SUGGESTIONS ═══════════ -->
+  <div class="card glow-amber" style="margin-bottom:28px;">
+    <div class="section-title" style="margin-top:0;">🎯 操作建议</div>
+    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:20px;">
+      <div>
+        <div style="font-weight:700;font-size:14px;margin-bottom:8px;color:var(--green);">✅ 可以做的</div>
+        <ul style="font-size:13px;color:var(--text-dim);line-height:2;list-style:none;padding:0;">
+          <li>· 网格策略正常运转，恒生科技注意卖盘</li>
+          <li>· 中证1000 PB分位仅33%，定投可考虑</li>
+          <li>· 黄金ETF趋势完好，防御仓位可持有</li>
+        </ul>
+      </div>
+      <div>
+        <div style="font-weight:700;font-size:14px;margin-bottom:8px;color:var(--amber);">⚠️ 需要注意的</div>
+        <ul style="font-size:13px;color:var(--text-dim);line-height:2;list-style:none;padding:0;">
+          <li>· 中小盘属超跌反弹，追高性价比低</li>
+          <li>· 上证50若破3.000，需评估大盘风险</li>
+          <li>· 芯片ETF回避，等企稳信号</li>
+        </ul>
+      </div>
+      <div>
+        <div style="font-weight:700;font-size:14px;margin-bottom:8px;color:var(--red);">❌ 不要做的</div>
+        <ul style="font-size:13px;color:var(--text-dim);line-height:2;list-style:none;padding:0;">
+          <li>· 不要追高恒生互联/中概（已连涨）</li>
+          <li>· 不要在上证50破位前抄底大金融</li>
+          <li>· 不要因一日大涨改变中期判断</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════ FOOTER ═══════════ -->
+  <div class="footer">
+    <span>AI Berkshire · 盘中复盘系统</span>
+    <span>数据源: 腾讯行情 (qt.gtimg.cn) · 蛋卷基金 · 东方财富</span>
+    <span>生成时间: 2026-07-27 11:35 CST</span>
+    <span style="color:var(--red);">⚠️ 不构成投资建议</span>
+  </div>
+
+</div>
+
+</body>
+</html>

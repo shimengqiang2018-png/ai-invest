@@ -1,0 +1,387 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="color-scheme" content="only light">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>A股复盘 2026.07.27</title>
+<style>
+  html { color-scheme: only light !important; forced-color-adjust: none !important; }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body {
+    background: #f2f3f5 !important;
+    color: #1a1a2e !important;
+    font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+    font-size: 14px;
+    line-height: 1.5;
+    padding: 10px 12px 30px;
+    max-width: 540px;
+    margin: 0 auto;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .header {
+    text-align: center;
+    padding: 12px 0 10px;
+    margin-bottom: 10px;
+  }
+  .header .date {
+    font-size: 12px;
+    color: #6b7280;
+    letter-spacing: 1px;
+  }
+  .header h1 {
+    font-size: 22px;
+    font-weight: 800;
+    margin: 4px 0;
+    color: #111827;
+    letter-spacing: 1px;
+  }
+  .header .sub {
+    font-size: 12px;
+    color: #e53e3e;
+    font-weight: 500;
+  }
+
+  .card {
+    background: #ffffff !important;
+    border: 1px solid #e5e7eb;
+    border-radius: 12px;
+    padding: 14px 15px;
+    margin-bottom: 10px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+  }
+  .card-title {
+    font-size: 12px;
+    font-weight: 700;
+    color: #6b7280;
+    text-transform: uppercase;
+    letter-spacing: 1.5px;
+    margin-bottom: 10px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .dot { width:6px; height:6px; border-radius:2px; display:inline-block; flex-shrink:0; }
+
+  .index-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+  .index-item {
+    background: #f9fafb !important;
+    border-radius: 8px;
+    padding: 9px 11px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+  .index-item .name { font-size: 13px; font-weight: 600; color: #1f2937; }
+  .index-item .right { text-align: right; }
+  .index-item .price { font-size: 15px; font-weight: 700; color: #111827; }
+  .index-item .change { font-size: 12px; font-weight: 700; }
+  .up { color: #e53e3e; }
+  .down { color: #059669; }
+
+  .pulse-row { display: flex; justify-content: space-around; text-align: center; }
+  .pulse-item .val { font-size: 24px; font-weight: 800; line-height: 1.2; }
+  .pulse-item .label { font-size: 11px; color: #6b7280; margin-top: 2px; }
+
+  .hero {
+    background: #fffbf0 !important;
+    border: 1.5px solid #fbbf24;
+    border-radius: 12px;
+    padding: 14px 15px;
+    margin-bottom: 10px;
+  }
+  .hero-name { font-size: 20px; font-weight: 800; color: #111827; }
+  .hero-code { font-size: 11px; color: #6b7280; font-weight: 400; display: block; }
+  .hero-tag {
+    display: inline-block;
+    background: #fbbf24;
+    color: #78350f;
+    font-size: 10px;
+    font-weight: 700;
+    padding: 3px 8px;
+    border-radius: 4px;
+    letter-spacing: 0.5px;
+  }
+  .hero-change { font-size: 36px; font-weight: 900; color: #e53e3e; line-height: 1.1; margin: 6px 0 2px; }
+  .hero-price-line { font-size: 12px; color: #6b7280; margin-bottom: 8px; }
+  .hero-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+  .hero-stat {
+    background: #ffffff !important;
+    border: 1px solid #fde68a;
+    border-radius: 8px;
+    padding: 10px;
+    text-align: center;
+  }
+  .hero-stat .v { font-size: 18px; font-weight: 800; color: #b45309; }
+  .hero-stat .l { font-size: 10px; color: #6b7280; margin-top: 2px; line-height: 1.3; }
+  .hero-records {
+    margin-top: 10px;
+    font-size: 11px;
+    color: #92400e;
+    line-height: 1.7;
+    background: #fffbeb !important;
+    border-radius: 8px;
+    padding: 8px 10px;
+  }
+
+  .sector-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 7px 0;
+    border-bottom: 1px solid #f3f4f6;
+  }
+  .sector-row:last-child { border-bottom: none; }
+  .sector-name { font-size: 13px; font-weight: 500; color: #1f2937; }
+  .sector-pct { font-weight: 700; font-size: 13px; min-width: 56px; text-align: right; }
+
+  .val-row { margin-bottom: 10px; }
+  .val-row:last-child { margin-bottom: 0; }
+  .val-header { display: flex; justify-content: space-between; font-size: 12px; margin-bottom: 3px; }
+  .val-header .idx { font-weight: 600; color: #1f2937; }
+  .val-header .detail { color: #6b7280; font-size: 11px; }
+  .val-header .pct { font-weight: 700; font-size: 13px; }
+  .val-bar { height: 8px; border-radius: 4px; background: #e5e7eb; overflow: hidden; }
+  .val-bar-fill { height: 100%; border-radius: 4px; }
+
+  .logic-list { list-style: none; }
+  .logic-list li { padding: 10px 0; border-bottom: 1px solid #f3f4f6; display: flex; gap: 10px; align-items: flex-start; }
+  .logic-list li:last-child { border-bottom: none; }
+  .logic-num {
+    background: #fee2e2 !important;
+    color: #e53e3e;
+    width: 22px; height: 22px;
+    border-radius: 6px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 12px; font-weight: 800; flex-shrink: 0;
+  }
+  .logic-text strong { font-size: 14px; color: #111827; }
+  .logic-text .desc { font-size: 12px; color: #6b7280; display: block; margin-top: 2px; }
+
+  .risk-grid { display: grid; gap: 8px; }
+  .risk-item {
+    background: #fef2f2 !important;
+    border: 1px solid #fecaca;
+    border-radius: 8px;
+    padding: 10px 12px;
+    font-size: 12px;
+    display: flex; gap: 8px; align-items: flex-start;
+    color: #1f2937;
+  }
+  .risk-num {
+    background: #e53e3e;
+    color: #ffffff;
+    width: 18px; height: 18px;
+    border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 10px; font-weight: 800; flex-shrink: 0;
+  }
+
+  .macro-row { display: flex; justify-content: space-around; text-align: center; }
+  .macro-item .m-val { font-size: 20px; font-weight: 800; color: #111827; }
+  .macro-item .m-label { font-size: 11px; color: #6b7280; margin-top: 2px; }
+
+  .summary-box {
+    background: #eff6ff !important;
+    border: 1.5px solid #93c5fd;
+    border-radius: 10px;
+    padding: 12px 14px;
+    text-align: center;
+    font-size: 14px;
+    font-weight: 700;
+    color: #1e40af;
+    line-height: 1.7;
+  }
+
+  hr { border: none; border-top: 1px solid #e5e7eb; margin: 8px 0; }
+  .footer { text-align: center; font-size: 10px; color: #9ca3af; padding: 12px 0 4px; line-height: 1.8; }
+  .divider { text-align: center; color: #d1d5db; font-size: 10px; margin: 6px 0; letter-spacing: 2px; }
+
+  /* 强制亮色：即使系统暗黑模式下也不变 */
+  @media (prefers-color-scheme: dark) {
+    html, body, .card, .hero, .hero-stat, .hero-records, .index-item, .logic-num, .risk-item, .summary-box {
+      background-color: #ffffff !important;
+    }
+    html { background-color: #f2f3f5 !important; }
+    body { background-color: #f2f3f5 !important; color: #1a1a2e !important; }
+    .card { background-color: #ffffff !important; border-color: #e5e7eb !important; }
+    .hero { background-color: #fffbf0 !important; }
+    .hero-stat { background-color: #ffffff !important; }
+    .hero-records { background-color: #fffbeb !important; }
+    .index-item { background-color: #f9fafb !important; }
+    .logic-num { background-color: #fee2e2 !important; }
+    .risk-item { background-color: #fef2f2 !important; }
+    .summary-box { background-color: #eff6ff !important; color: #1e40af !important; }
+    .sector-name, .index-item .name, .index-item .price, .val-header .idx,
+    .logic-text strong, .macro-item .m-val, .hero-name, h1 { color: #111827 !important; }
+  }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <div class="date">2026 / 07 / 27 · 星期一</div>
+  <h1>A股市场复盘</h1>
+  <div class="sub">长鑫科技首日登顶 · 两市成交破两万亿</div>
+</div>
+
+<div class="card">
+  <div class="card-title"><span class="dot" style="background:#e53e3e"></span>主要指数行情</div>
+  <div class="index-grid">
+    <div class="index-item"><span class="name">上证指数</span><div class="right"><div class="price">3,858.25</div><div class="change up">+1.15%</div></div></div>
+    <div class="index-item"><span class="name">深证成指</span><div class="right"><div class="price">14,148.73</div><div class="change up">+2.72%</div></div></div>
+    <div class="index-item"><span class="name">创业板指</span><div class="right"><div class="price">3,590.79</div><div class="change up">+3.16%</div></div></div>
+    <div class="index-item"><span class="name">沪深300</span><div class="right"><div class="price">4,702.43</div><div class="change up">+1.15%</div></div></div>
+    <div class="index-item" style="background:#fef2f2"><span class="name">中证1000 🔥</span><div class="right"><div class="price">7,228.78</div><div class="change up">+3.33%</div></div></div>
+    <div class="index-item" style="background:#ecfdf5"><span class="name">上证50 ❄️</span><div class="right"><div class="price">2,950.43</div><div class="change down">−0.20%</div></div></div>
+    <div class="index-item"><span class="name">中证500</span><div class="right"><div class="price">7,720.60</div><div class="change up">+2.49%</div></div></div>
+    <div class="index-item"><span class="name">科创50</span><div class="right"><div class="price">1,807.95</div><div class="change up">+1.16%</div></div></div>
+  </div>
+  <div style="font-size:11px;color:#6b7280;margin-top:8px;text-align:center">
+    中证1000 vs 上证50 剪刀差 <span style="color:#e53e3e;font-weight:700">3.53%</span> · 小盘碾压大盘
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-title"><span class="dot" style="background:#059669"></span>市场情绪</div>
+  <div class="pulse-row">
+    <div class="pulse-item"><div class="val" style="color:#e53e3e">5,195</div><div class="label">上涨家数</div></div>
+    <div class="pulse-item"><div class="val" style="color:#1f2937">286</div><div class="label">下跌家数</div></div>
+    <div class="pulse-item"><div class="val" style="color:#2563eb">2.08<span style="font-size:14px">万亿</span></div><div class="label">两市成交额</div></div>
+    <div class="pulse-item"><div class="val" style="color:#d97706">111</div><div class="label">涨停家数</div></div>
+  </div>
+  <div style="display:flex;justify-content:space-between;font-size:11px;color:#6b7280;margin-top:8px;padding-top:8px;border-top:1px solid #e5e7eb">
+    <span>较上日放量 <span style="color:#e53e3e;font-weight:600">+1,455亿</span></span>
+    <span>跌停 6家</span>
+    <span>封板率 90%</span>
+  </div>
+</div>
+
+<div class="hero">
+  <div class="card-title"><span class="dot" style="background:#d97706"></span>今日主角</div>
+  <div style="margin-bottom:4px">
+    <div class="hero-name">长鑫科技 <span class="hero-code">688825 · 科创板</span></div>
+    <span class="hero-tag">DRAM 芯片</span>
+  </div>
+  <div class="hero-change">+465.82%</div>
+  <div class="hero-price-line">
+    发行价 <span style="color:#111827;font-weight:600">8.66</span> → 开盘 <span style="color:#e53e3e;font-weight:600">49.50</span> → 收盘 <span style="color:#e53e3e;font-weight:700">49.00元</span>
+    &nbsp;|&nbsp; 最高 <span style="color:#e53e3e;font-weight:600">55.03</span>（+535%）
+  </div>
+  <div class="hero-grid">
+    <div class="hero-stat"><div class="v">1,412<span style="font-size:11px">亿</span></div><div class="l">成交额<br>🏆 A股历史纪录</div></div>
+    <div class="hero-stat"><div class="v">3.28<span style="font-size:11px">万亿</span></div><div class="l">总市值<br>🏆 登顶A股第一</div></div>
+    <div class="hero-stat"><div class="v">66.4<span style="font-size:11px">%</span></div><div class="l">换手率<br>首日 2/3 筹码易手</div></div>
+  </div>
+  <div class="hero-records">
+    ✅ A股首只单日成交破千亿个股<br>
+    ✅ 市值超越工商银行，登顶A股第一<br>
+    ✅ 科创板史上最大IPO · 募资 579亿<br>
+    ✅ 中国唯一 DRAM 全流程 IDM 企业 · 全球第四
+  </div>
+</div>
+
+<div class="divider">▼ ▼ ▼</div>
+
+<div class="card">
+  <div class="card-title"><span class="dot" style="background:#2563eb"></span>板块红黑榜</div>
+  <div style="font-size:11px;font-weight:700;color:#e53e3e;margin-bottom:6px">🟢 领涨板块</div>
+  <div class="sector-row"><span class="sector-name">建筑材料</span><span class="sector-pct up">+5.44%</span></div>
+  <div class="sector-row"><span class="sector-name">电子化学品</span><span class="sector-pct up">+5.41%</span></div>
+  <div class="sector-row"><span class="sector-name">元件 / PCB</span><span class="sector-pct up">+5.24%</span></div>
+  <div class="sector-row"><span class="sector-name">美容护理</span><span class="sector-pct up">+4.91%</span></div>
+  <div class="sector-row"><span class="sector-name">电池</span><span class="sector-pct up">+4.89%</span></div>
+  <div class="sector-row"><span class="sector-name">医疗服务 / CRO</span><span class="sector-pct up">+4.41%</span></div>
+
+  <hr>
+  <div style="font-size:11px;font-weight:700;color:#059669;margin-bottom:6px">🔴 领跌 / 滞涨</div>
+  <div class="sector-row" style="background:#fef2f2;margin:0 -8px;padding:7px 8px;border-radius:4px"><span class="sector-name">油气开采及服务</span><span class="sector-pct down">−3.12%</span></div>
+  <div class="sector-row"><span class="sector-name">保险</span><span class="sector-pct down">−0.69%</span></div>
+  <div class="sector-row"><span class="sector-name">银行</span><span class="sector-pct" style="color:#9ca3af;font-weight:700">+0.01%</span></div>
+  <div class="sector-row"><span class="sector-name">煤炭开采</span><span class="sector-pct up">+1.18%</span></div>
+
+  <div style="font-size:11px;color:#6b7280;margin-top:8px;padding:8px 10px;background:#f9fafb;border-radius:6px;text-align:center">
+    💨 旧能源 → 新经济 &nbsp;|&nbsp; 🏦 大金融 → 科技消费 &nbsp;|&nbsp; 🛡️ 红利防御 → 小盘成长
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-title"><span class="dot" style="background:#d97706"></span>指数估值水位（近10年PE分位）</div>
+  <div class="val-row">
+    <div class="val-header"><span class="idx">沪深300</span><span class="detail">PE 14.4 · PB 1.46</span><span class="pct" style="color:#e53e3e">86.6%</span></div>
+    <div class="val-bar"><div class="val-bar-fill" style="width:86.6%;background:#e53e3e"></div></div>
+  </div>
+  <div class="val-row">
+    <div class="val-header"><span class="idx">上证50</span><span class="detail">PE 11.7 · PB 1.27</span><span class="pct" style="color:#e53e3e">84.9%</span></div>
+    <div class="val-bar"><div class="val-bar-fill" style="width:84.9%;background:#e53e3e"></div></div>
+  </div>
+  <div class="val-row">
+    <div class="val-header"><span class="idx">中证500</span><span class="detail">PE 35.6 · PB 2.40</span><span class="pct" style="color:#e53e3e">85.3%</span></div>
+    <div class="val-bar"><div class="val-bar-fill" style="width:85.3%;background:#e53e3e"></div></div>
+  </div>
+  <div class="val-row">
+    <div class="val-header"><span class="idx">创业板指</span><span class="detail">PE 44.4 · PB 5.92</span><span class="pct" style="color:#d97706">55.3%</span></div>
+    <div class="val-bar"><div class="val-bar-fill" style="width:55.3%;background:#d97706"></div></div>
+  </div>
+  <div class="val-row">
+    <div class="val-header"><span class="idx">中证1000</span><span class="detail">PE 42.1 · PB 2.25</span><span class="pct" style="color:#d97706">66.5%</span></div>
+    <div class="val-bar"><div class="val-bar-fill" style="width:66.5%;background:#d97706"></div></div>
+  </div>
+  <div style="font-size:11px;color:#6b7280;margin-top:10px;padding:8px 10px;background:#fef2f2;border-radius:6px;border-left:3px solid #e53e3e">
+    ⚠️ 除创业板和中证1000外，主要指数 PE 分位均超 <strong>80%</strong>。当前上涨由<strong>流动性+情绪</strong>驱动，非盈利驱动，安全边际不足。
+  </div>
+</div>
+
+<div class="divider">▼ ▼ ▼</div>
+
+<div class="card">
+  <div class="card-title"><span class="dot" style="background:#2563eb"></span>上涨的 3 条逻辑</div>
+  <ol class="logic-list">
+    <li>
+      <span class="logic-num">1</span>
+      <div class="logic-text"><strong>长鑫虹吸，风格极化</strong><span class="desc">单票成交 1,412 亿，占全市场 6.8%。大量资金从大金融和旧能源抽离涌入科技成长。上证50 是全市场唯一收跌的主要指数。小盘碾压大盘。</span></div>
+    </li>
+    <li>
+      <span class="logic-num">2</span>
+      <div class="logic-text"><strong>宽货币 + 弱复苏 = 成长友好</strong><span class="desc">6月PMI 50.3% 刚回荣枯线，人民币 6.78，10Y国债收益率低位。流动性宽松而经济仅是弱复苏——这个组合对高估值小盘成长最有利。</span></div>
+    </li>
+    <li>
+      <span class="logic-num">3</span>
+      <div class="logic-text"><strong>A股估值锚移位</strong><span class="desc">长鑫 3.28万亿市值超越工行，A股定价体系从"银行股息"向"科技增长"倾斜。半导体产业链战配企业集体受益，板块联动效应显著。</span></div>
+    </li>
+  </ol>
+</div>
+
+<div class="card" style="border-color:#fecaca">
+  <div class="card-title"><span class="dot" style="background:#e53e3e"></span>风险提示</div>
+  <div class="risk-grid">
+    <div class="risk-item"><span class="risk-num">!</span><div><strong>估值高位</strong>：沪深300 PE分位 86.6%，若流动性边际收紧，回调压力大</div></div>
+    <div class="risk-item"><span class="risk-num">!</span><div><strong>长鑫换手 66%</strong>：2/3 筹码首日易手，历史超级大盘新股首日后多震荡回调</div></div>
+    <div class="risk-item"><span class="risk-num">!</span><div><strong>7/31 公布 PMI</strong>：市场预期 ~50.1，若低于 50 将触发风格切回防御</div></div>
+    <div class="risk-item"><span class="risk-num">!</span><div><strong>油气风险未出清</strong>：中曼石油跌停，产业链补跌可能延续</div></div>
+  </div>
+</div>
+
+<div class="card">
+  <div class="macro-row">
+    <div class="macro-item"><div class="m-val" style="color:#d97706">50.3%</div><div class="m-label">6月 制造业 PMI</div></div>
+    <div class="macro-item"><div class="m-val" style="color:#111827">6.78</div><div class="m-label">USD / CNY</div></div>
+    <div class="macro-item"><div class="m-val" style="color:#9ca3af">待公布</div><div class="m-label">7月 PMI · 7/31</div></div>
+  </div>
+</div>
+
+<div class="summary-box">
+  📢 流动性驱动的成长碾压日<br>
+  长鑫登顶A股 · 小票狂欢 · 大象吃灰<br>
+  <span style="font-size:12px;font-weight:500">估值不低，且涨且谨慎。</span>
+</div>
+
+<div class="footer">
+  数据来源：腾讯行情 · 蛋卷基金 PE/PB 分位（近10年）· 东方财富 · 证券时报<br>
+  免责声明：本文仅供研究参考，不构成任何投资建议<br>
+  Generated by AI Invest · 2026.07.27
+</div>
+
+</body>
+</html>

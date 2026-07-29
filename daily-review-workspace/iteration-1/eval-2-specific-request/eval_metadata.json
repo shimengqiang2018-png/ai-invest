@@ -1,0 +1,37 @@
+{
+  "eval_id": 2,
+  "eval_name": "specific-request",
+  "prompt": "帮我看看今天A股什么情况，做个市场回顾，生成抖音能发的图",
+  "assertions": [
+    {
+      "id": "b1",
+      "description": "生成至少3个HTML文件",
+      "check": "outputs目录中存在3个或以上.html文件"
+    },
+    {
+      "id": "b2",
+      "description": "生成至少3个PNG图片",
+      "check": "outputs目录中存在3个或以上.png文件"
+    },
+    {
+      "id": "b3",
+      "description": "PNG尺寸为1080×1920",
+      "check": "所有PNG图片尺寸均为1080×1920"
+    },
+    {
+      "id": "b4",
+      "description": "包含板块涨跌数据",
+      "check": "HTML中包含领涨/领跌板块信息"
+    },
+    {
+      "id": "b5",
+      "description": "包含成交额等市场情绪数据",
+      "check": "HTML中包含成交额或上涨家数等情绪指标"
+    },
+    {
+      "id": "b6",
+      "description": "页脚包含免责声明",
+      "check": "HTML中包含免责声明或数据来源说明"
+    }
+  ]
+}

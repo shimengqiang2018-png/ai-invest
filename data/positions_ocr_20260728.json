@@ -1,0 +1,90 @@
+{
+  "eastmoney_holdings": [
+    {
+      "code": "512880",
+      "name": "证券ETF",
+      "shares": 6800,
+      "available": 6500,
+      "price": 1.084,
+      "cost": 1.112,
+      "pnl": -190.99,
+      "pnl_pct": -2.52,
+      "market_value": 7371.2
+    },
+    {
+      "code": "513180",
+      "name": "恒生科技",
+      "shares": 10100,
+      "available": 10100,
+      "price": 0.596,
+      "cost": 0.574,
+      "pnl": 223.64,
+      "pnl_pct": 3.83,
+      "market_value": 6019.6
+    },
+    {
+      "code": "159920",
+      "name": "恒生ETF",
+      "shares": 3200,
+      "available": 3200,
+      "price": 1.492,
+      "cost": 1.409,
+      "pnl": 267.08,
+      "pnl_pct": 5.89,
+      "market_value": 4774.4
+    },
+    {
+      "code": "159915",
+      "name": "创业板",
+      "shares": 800,
+      "available": 600,
+      "price": 3.368,
+      "cost": 3.376,
+      "pnl": -6.3,
+      "pnl_pct": -0.24,
+      "market_value": 2694.4
+    },
+    {
+      "code": "512690",
+      "name": "酒ETF",
+      "shares": 5000,
+      "available": 5000,
+      "price": 0.429,
+      "cost": 0.42,
+      "pnl": 44.47,
+      "pnl_pct": 2.14,
+      "market_value": 2145.0
+    },
+    {
+      "code": "510300",
+      "name": "沪深300",
+      "shares": 400,
+      "available": 400,
+      "price": 4.626,
+      "cost": 4.537,
+      "pnl": 35.57,
+      "pnl_pct": 1.96,
+      "market_value": 1850.4
+    },
+    {
+      "code": "512010",
+      "name": "医药ETF",
+      "shares": 5000,
+      "available": 5000,
+      "price": 0.366,
+      "cost": 0.371,
+      "pnl": -25.46,
+      "pnl_pct": -1.35,
+      "market_value": 1830.0
+    }
+  ],
+  "account_summary": {
+    "total_assets": 37348.2,
+    "securities_value": 26685.0,
+    "available_cash": 10663.1,
+    "withdrawable_cash": 10663.1,
+    "position_ratio": 71.4,
+    "daily_pnl": -320.76,
+    "total_pnl": 348.01
+  }
+}

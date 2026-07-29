@@ -1,0 +1,519 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ETF 网格+动量双策略 · 操作文档</title>
+<style>
+:root {
+  --bg: #fafbfc; --card: #fff; --border: #d0d7de; --text: #24292e;
+  --text2: #57606a; --green: #1a7f37; --red: #cf222e; --orange: #bc4c00;
+}
+* { margin:0; padding:0; box-sizing:border-box; }
+body { font-family: -apple-system, BlinkMacSystemFont, "PingFang SC","Microsoft YaHei",sans-serif; background: var(--bg); color: var(--text); line-height: 1.7; padding: 20px; }
+.c { max-width: 1040px; margin: 0 auto; }
+
+/* header */
+.header { text-align: center; padding: 32px 20px 20px; }
+.header h1 { font-size: 1.7em; margin-bottom: 6px; }
+.header .meta { color: var(--text2); font-size: 0.89em; }
+.header .badge-row { margin-top: 10px; display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; }
+.badge { display:inline-block; padding:3px 12px; border-radius:12px; font-size:0.82em; font-weight:600; }
+.badge-g { background:#dafbe1; color:#1a7f37; }
+.badge-r { background:#ffebe9; color:#cf222e; }
+.badge-b { background:#ddf4ff; color:#0969da; }
+.badge-o { background:#fff8c5; color:#9a6700; }
+
+h2 { font-size: 1.2em; margin: 28px 0 12px; padding-bottom: 6px; border-bottom: 2px solid var(--border); }
+h3 { font-size: 1.05em; margin: 18px 0 10px; }
+h4 { font-size: 0.95em; margin: 12px 0 8px; color: var(--text2); }
+
+.card { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 18px 22px; margin-bottom: 14px; }
+.callout { border-left: 4px solid var(--orange); background: #fff8e1; border-radius: 6px; padding: 12px 18px; margin: 12px 0; font-size: 0.92em; }
+.callout-warn { border-left-color: var(--red); background: #ffebe9; }
+.callout-info { border-left-color: #0969da; background: #ddf4ff; }
+
+table { width: 100%; border-collapse: collapse; margin: 8px 0; font-size: 0.89em; }
+th, td { padding: 8px 12px; text-align: left; border-bottom: 1px solid #eee; }
+th { background: #f6f8fa; font-weight: 600; white-space: nowrap; }
+.num { text-align: right; font-family: "SF Mono","Fira Code",monospace; }
+.center { text-align: center; }
+.pass { color: var(--green); font-weight: 600; }
+.fail { color: var(--red); font-weight: 600; }
+.warn { color: var(--orange); font-weight: 600; }
+
+.fr { display: flex; gap: 16px; flex-wrap: wrap; }
+.fc { flex: 1; min-width: 280px; }
+
+code { background: #f6f8fa; padding: 2px 6px; border-radius: 3px; font-size: 0.87em; font-family: "SF Mono","Fira Code",monospace; }
+pre { background: #1e1e1e; color: #d4d4d4; border-radius: 6px; padding: 14px 18px; overflow-x: auto; font-size: 0.84em; line-height: 1.6; margin: 10px 0; }
+pre .kw { color: #569cd6; }
+pre .s { color: #ce9178; }
+pre .c { color: #6a9955; }
+pre .cmd { color: #dcdcaa; }
+
+.note { font-size: 0.84em; color: var(--text2); margin-top: 6px; }
+.summary-box { background: linear-gradient(135deg,#f6fef9,#dafbe1); border: 1px solid #1a7f37; border-radius: 10px; padding: 20px 24px; margin-top: 28px; }
+.summary-box h3 { margin: 0 0 8px; color: var(--green); }
+
+.tag { display:inline-block; padding:1px 8px; border-radius:3px; font-size:0.78em; font-weight:600; margin:0 2px; }
+.tg { background:#dafbe1; color:#1a7f37; }
+.tr { background:#ffebe9; color:#cf222e; }
+.ty { background:#fff8c5; color:#9a6700; }
+.tb { background:#ddf4ff; color:#0969da; }
+
+.progress { display: flex; gap: 8px; margin: 12px 0; flex-wrap: wrap; }
+.progress .step { flex:1; min-width:140px; background: var(--card); border:1px solid var(--border); border-radius:8px; padding:14px; text-align: center; }
+.progress .step .num { font-size:1.5em; font-weight:800; margin-bottom:4px; }
+.step-now { border-color: var(--red) !important; background: #fff5f5 !important; }
+.step-next { border-color: var(--orange) !important; }
+.step-later { opacity: 0.7; }
+
+.checklist { list-style:none; padding:0; }
+.checklist li { padding: 6px 0; border-bottom: 1px solid #f6f8fa; font-size:0.9em; }
+.checklist li:last-child { border-bottom:none; }
+.checklist .chk { display:inline-block; width:18px; height:18px; border:2px solid #d0d7de; border-radius:3px; margin-right:8px; vertical-align:-3px; }
+
+hr { border: none; border-top: 1px solid var(--border); margin: 22px 0; }
+.footnote { text-align: center; color: var(--text2); font-size: 0.78em; margin-top: 32px; padding-top: 16px; border-top: 1px solid var(--border); }
+</style>
+</head>
+<body>
+<div class="c">
+
+<!-- ====== HEADER ====== -->
+<div class="header">
+  <h1>🎯 网格 + 动量双策略操作方案</h1>
+  <div class="meta">数据日期: 2026-07-25 收盘（东方财富 OCR） | 总资产: ¥37,299.70 | 证券市值: ¥27,394.80 | 现金: ¥9,904.90</div>
+  <div class="badge-row">
+    <span class="badge badge-g">✅ 审计评分 4.5/5</span>
+    <span class="badge badge-b">📊 8.2年回测验证</span>
+    <span class="badge badge-r">⚠ 尾部风险可控</span>
+    <span class="badge badge-o">📋 实盘可执行</span>
+  </div>
+</div>
+
+<!-- ====== PROGRESS OVERVIEW ====== -->
+<div class="progress">
+  <div class="step step-now">
+    <div class="num" style="color:var(--red);">1</div>
+    <div style="font-size:0.85em;font-weight:600;">⚡ 立即</div>
+    <div style="font-size:0.78em;color:var(--text2);">设条件单<br>10 分钟</div>
+  </div>
+  <div class="step step-next">
+    <div class="num" style="color:var(--orange);">2</div>
+    <div style="font-size:0.85em;font-weight:600;">📅 本周</div>
+    <div style="font-size:0.78em;color:var(--text2);">减仓恒生科技<br>释放资金</div>
+  </div>
+  <div class="step step-later">
+    <div class="num" style="color:#0969da;">3</div>
+    <div style="font-size:0.85em;font-weight:600;">⏳ 数周后</div>
+    <div style="font-size:0.78em;color:var(--text2);">等待回收<br>启动动量信号</div>
+  </div>
+  <div class="step step-later">
+    <div class="num" style="color:#1a7f37;">4</div>
+    <div style="font-size:0.85em;font-weight:600;">🏁 3-6月后</div>
+    <div style="font-size:0.78em;color:var(--text2);">目标态<br>双策略运转</div>
+  </div>
+</div>
+
+<!-- ====== CURRENT HOLDINGS ====== -->
+<h2>当前持仓</h2>
+
+<div class="card">
+  <table>
+    <tr><th>#</th><th>代码</th><th>名称</th><th class="num">持仓</th><th class="num">现价</th><th class="num">成本</th><th class="num">市值</th><th class="num">浮盈</th><th class="center">策略归属</th></tr>
+    <tr>
+      <td>1</td><td>512880</td><td>证券ETF</td><td class="num">6,500</td><td class="num">1.099</td><td class="num">1.113</td><td class="num">¥7,143.50</td><td class="num fail">-92.81</td><td class="center"><span class="tag tg">网格核心</span></td>
+    </tr>
+    <tr>
+      <td>2</td><td>513180</td><td>恒生科技</td><td class="num">13,100</td><td class="num">0.585</td><td class="num">0.578</td><td class="num">¥7,663.50</td><td class="num pass">+91.98</td><td class="center"><span class="tag tr">减仓</span></td>
+    </tr>
+    <tr>
+      <td>3</td><td>159920</td><td>恒生ETF</td><td class="num">3,200</td><td class="num">1.468</td><td class="num">1.409</td><td class="num">¥4,697.60</td><td class="num pass">+190.28</td><td class="center"><span class="tag tb">底仓</span></td>
+    </tr>
+    <tr>
+      <td>4</td><td>159915</td><td>创业板</td><td class="num">600</td><td class="num">3.508</td><td class="num">3.349</td><td class="num">¥2,104.80</td><td class="num pass">+95.48</td><td class="center"><span class="tag ty">网格观察</span></td>
+    </tr>
+    <tr>
+      <td>5</td><td>512690</td><td>酒ETF</td><td class="num">5,000</td><td class="num">0.416</td><td class="num">0.420</td><td class="num">¥2,080.00</td><td class="num fail">-20.53</td><td class="center"><span class="tag tr">只卖</span></td>
+    </tr>
+    <tr>
+      <td>6</td><td>510300</td><td>沪深300</td><td class="num">400</td><td class="num">4.701</td><td class="num">4.537</td><td class="num">¥1,880.40</td><td class="num pass">+65.57</td><td class="center"><span class="tag tb">底仓共用</span></td>
+    </tr>
+    <tr>
+      <td>7</td><td>512010</td><td>医药ETF</td><td class="num">5,000</td><td class="num">0.365</td><td class="num">0.371</td><td class="num">¥1,825.00</td><td class="num fail">-30.46</td><td class="center"><span class="tag tr">只卖</span></td>
+    </tr>
+  </table>
+</div>
+
+<div class="fr">
+  <div class="fc">
+    <div class="card">
+      <h4>按策略归属分组</h4>
+      <table>
+        <tr><th class="center">归属</th><th>标的</th><th class="num">市值</th><th class="num">占比</th></tr>
+        <tr><td class="center"><span class="tag tg">网格核心</span></td><td>512880</td><td class="num">¥7,144</td><td class="num">19.1%</td></tr>
+        <tr><td class="center"><span class="tag ty">网格观察</span></td><td>159915</td><td class="num">¥2,105</td><td class="num">5.6%</td></tr>
+        <tr><td class="center"><span class="tag tb">底仓共用</span></td><td>510300 + 159920</td><td class="num">¥6,578</td><td class="num">17.6%</td></tr>
+        <tr><td class="center"><span class="tag tr">待清理</span></td><td>513180+512690+512010</td><td class="num" style="color:var(--red); font-weight:700;">¥11,569</td><td class="num" style="color:var(--red); font-weight:700;">31.0%</td></tr>
+        <tr><td class="center">💰 现金</td><td>—</td><td class="num">¥9,905</td><td class="num">26.6%</td></tr>
+      </table>
+    </div>
+  </div>
+  <div class="fc">
+    <div class="callout callout-warn">
+      <strong>🔑 核心矛盾</strong><br>
+      31% 的资金（¥11,569）锁死在三个"只卖不买"的标的上。<br>
+      <strong>这 ¥11,569 就是动量策略的种子资金。</strong>
+    </div>
+  </div>
+</div>
+
+<hr>
+
+<!-- ====== STRATEGY OVERVIEW ====== -->
+<h2>资金分离规则</h2>
+
+<div class="card">
+  <table>
+    <tr><th></th><th class="center">网格子账户</th><th class="center">动量子账户</th></tr>
+    <tr><td>目标资金</td><td class="center">¥15,000-17,000</td><td class="center" style="font-weight:700;">¥20,000+</td></tr>
+    <tr><td>当前资金</td><td class="center">¥9,249 市值 + ¥4,905 现金</td><td class="center" style="color:var(--red);">¥0（待建仓）</td></tr>
+    <tr><td>资金来源</td><td class="center">现有网格仓位优化</td><td class="center">待清理仓位回收 + 部分现金</td></tr>
+    <tr><td>运作方式</td><td class="center">条件单自动触发</td><td class="center">双周跑 signal.py 手工执行</td></tr>
+  </table>
+</div>
+
+<div class="callout callout-warn">
+  <strong>🚫 红线：</strong>两套策略资金物理隔离，互相不救、不补、不挪用。
+</div>
+
+<hr>
+
+<!-- ====== ETF ALLOCATION ====== -->
+<h2>ETF 分配</h2>
+
+<div class="card">
+  <table>
+    <tr><th>代码</th><th>名称</th><th class="center">归属</th><th>原因</th></tr>
+    <tr><td>512880</td><td>证券ETF</td><td class="center"><span class="tag tg">仅网格</span></td><td>均值回归强，震荡收割（回测诚实地跑输B&H）</td></tr>
+    <tr><td>159915</td><td>创业板ETF</td><td class="center"><span class="tag ty">共用</span></td><td>网格α高 + 动量池A股成长敞口。各自记账不混淆</td></tr>
+    <tr><td>518880</td><td>黄金ETF</td><td class="center"><span class="tag tb">仅动量</span></td><td>趋势性强，与其他资产相关 0.01</td></tr>
+    <tr><td>513100</td><td>纳指ETF</td><td class="center"><span class="tag tb">仅动量</span></td><td>纯趋势品种，网格会卖飞</td></tr>
+    <tr><td>510300</td><td>沪深300</td><td class="center"><span class="tag tg">底仓不动</span></td><td>不动不卖，不计入两套策略活跃资金</td></tr>
+    <tr><td>159920</td><td>恒生ETF</td><td class="center"><span class="tag tg">底仓不动</span></td><td>港股敞口</td></tr>
+    <tr><td>513180</td><td>恒生科技</td><td class="center"><span class="tag tr">减仓后底仓</span></td><td>从 13,100 减到 8,000-10,000（风控纪律，非不看好）</td></tr>
+    <tr><td>512690</td><td>酒ETF</td><td class="center"><span class="tag tr">清仓</span></td><td>结构性衰退</td></tr>
+    <tr><td>512010</td><td>医药ETF</td><td class="center"><span class="tag tr">清仓</span></td><td>结构性衰退</td></tr>
+  </table>
+</div>
+
+<hr>
+
+<!-- ====== MOMENTUM STRATEGY ====== -->
+<h2>动量策略 — 回测数据</h2>
+
+<div class="card">
+  <h3>最终池: 518880 黄金 + 513100 纳指 + 159915 创业板</h3>
+  <table>
+    <tr><th>指标</th><th class="num">数据</th><th>指标</th><th class="num">数据</th></tr>
+    <tr><td>回测区间</td><td class="num">2018-04 ~ 2026-07</td><td>年化收益</td><td class="num pass">+36.6%</td></tr>
+    <tr><td>覆盖周期</td><td class="num">8.2年（2018熊+2020疫情+2021-2024大熊+反弹）</td><td>总收益率</td><td class="num pass">+1,204.4%</td></tr>
+    <tr><td>超额收益</td><td class="num pass">+1,100.7%</td><td>胜率</td><td class="num">59%（48/82）</td></tr>
+    <tr><td>交易次数</td><td class="num">164次（~20次/年）</td><td>盈亏比</td><td class="num pass">3.20:1</td></tr>
+    <tr><td>平均盈利</td><td class="num pass">¥32,215</td><td>平均亏损</td><td class="num fail">¥10,056</td></tr>
+  </table>
+</div>
+
+<div class="card">
+  <h3>各 ETF 贡献</h3>
+  <table>
+    <tr><th>ETF</th><th class="num">B&H收益</th><th class="num">被选中</th><th class="num">贡献盈亏</th><th class="num">胜率</th></tr>
+    <tr><td>518880 黄金</td><td class="num pass">+211.5%</td><td class="num">28次</td><td class="num pass">+¥387,751</td><td class="num">57%</td></tr>
+    <tr><td>513100 纳指</td><td class="num fail">-5.8%</td><td class="num">28次</td><td class="num pass">+¥310,949</td><td class="num">68%</td></tr>
+    <tr><td>159915 创业板</td><td class="num pass">+105.5%</td><td class="num">26次</td><td class="num pass">+¥505,720</td><td class="num">50%</td></tr>
+  </table>
+  <div class="callout callout-info">
+    <strong>💡</strong> 纳指 B&H 亏 5.8%，但策略在它身上赚了 ¥31 万——策略核心价值在于"躲过纳指的下跌段"。
+  </div>
+</div>
+
+<div class="card">
+  <h3>滚动窗口验证 — 25 个窗口（12 月窗口, 3 月步长）</h3>
+  <table>
+    <tr><th>指标</th><th class="num">数据</th></tr>
+    <tr><td>正超额窗口</td><td class="num"><span class="pass">20/25 (80%)</span> — 平均超额 <span class="pass">+59.6%</span></td></tr>
+    <tr><td>最差窗口</td><td class="num"><span class="fail">-63.3%</span> (2020-07~2021-07, 创业板牛转熊)</td></tr>
+  </table>
+</div>
+
+<div class="card">
+  <h3>⚠️ 5 个负超额窗口</h3>
+  <table>
+    <tr><th>窗口</th><th class="num">策略</th><th class="num">基准</th><th class="num">超额</th><th>市场环境</th></tr>
+    <tr><td>2019-04 ~ 2020-04</td><td class="num fail">-7.6%</td><td class="num">+29.0%</td><td class="num fail">-36.6%</td><td>疫情初期，黄金避险但策略切换滞后</td></tr>
+    <tr><td>2020-07 ~ 2021-07</td><td class="num fail">-49.5%</td><td class="num">+13.8%</td><td class="num fail">-63.3%</td><td>创业板牛转熊，动量追高被埋</td></tr>
+    <tr><td>2021-01 ~ 2022-01</td><td class="num fail">-81.6%</td><td class="num fail">-31.9%</td><td class="num fail">-49.8%</td><td>A股全面熊市，动量策略崩溃</td></tr>
+    <tr><td>2021-07 ~ 2022-07</td><td class="num fail">-53.0%</td><td class="num fail">-33.1%</td><td class="num fail">-19.9%</td><td>延续熊市，策略仍跑输</td></tr>
+    <tr><td>2023-07 ~ 2024-07</td><td class="num">+1.0%</td><td class="num">+6.7%</td><td class="num fail">-5.7%</td><td>A股阴跌，几乎无机会</td></tr>
+  </table>
+</div>
+
+<div class="callout">
+  <strong>🎯 核心认知：</strong>80% 窗口赚钱，20% 窗口亏钱——但亏钱的窗口可能亏得很惨。全周期 +1,204% 正是承担这个尾部风险换来的。不要在赚钱时以为策略无敌，也不要在亏钱时放弃策略。
+</div>
+
+<hr>
+
+<!-- ====== GRID BACKTEST ====== -->
+<h2>网格策略 — 回测验证</h2>
+
+<div class="card">
+  <h3>512880 证券ETF 回测（2020.05 ~ 2026.07，6年）</h3>
+  <table>
+    <tr><th>指标</th><th class="num">当前网格</th><th class="num">买入持有</th><th class="num">差距</th></tr>
+    <tr><td>总收益率</td><td class="num warn">+11.34%</td><td class="num pass">+17.67%</td><td class="num fail">-6.3pp</td></tr>
+    <tr><td>年化收益</td><td class="num warn">+1.82%</td><td class="num">+2.77%</td><td class="num fail">-1.0pp</td></tr>
+    <tr><td>已实现盈亏(6年)</td><td class="num fail">¥436</td><td class="num">—</td><td class="num">68笔交易仅赚 ¥436</td></tr>
+    <tr><td>Sharpe / 最大回撤 / 胜率 / 盈亏比</td><td class="num">0.08 / 31.65% / 58.6% / 5.25</td><td colspan="2"></td></tr>
+  </table>
+  <div class="note">证券ETF 高 beta（≈1.2-1.5），趋势性压倒均值回归，网格在单边市中被击穿。</div>
+</div>
+
+<div class="card">
+  <h3>摩擦成本</h3>
+  <table>
+    <tr><th>项目</th><th>计算</th></tr>
+    <tr><td>佣金费率</td><td>万 2.5（0.025%），无最低 5 元（免五）</td></tr>
+    <tr><td>每格金额</td><td>300 股 × ¥1.10 = ¥330</td></tr>
+    <tr><td>往返佣金</td><td>¥330 × 0.025% × 2（买+卖）= ¥0.165</td></tr>
+    <tr><td>摩擦成本率</td><td><span class="pass">0.025%</span></td></tr>
+    <tr><td>68 笔总佣金</td><td>¥330 × 0.025% × 68 ≈ <span class="pass">¥5.61</span></td></tr>
+  </table>
+  <div class="note">佣金层面无障碍。免五是网格策略生效的前提。</div>
+</div>
+
+<hr>
+
+<!-- ====== EXECUTION STEPS ====== -->
+<h2>执行步骤</h2>
+
+<div class="card">
+  <h3>⚡ 第一步：立即 — 设条件单（10 分钟）</h3>
+
+  <h4>512880 证券ETF — 双向网格</h4>
+  <table>
+    <tr><td>持仓</td><td>6,500 股，成本 ¥1.113，现价 ¥1.099</td></tr>
+    <tr><td>卖出</td><td>+3.5%，5 层，300 股/格<br>¥1.138 / 1.178 / 1.219 / 1.262 / 1.306</td></tr>
+    <tr><td>买入</td><td>-2.5%，5 层，300 股/格<br>¥1.072 / 1.045 / 1.019 / 0.993 / 0.968</td></tr>
+    <tr><td>备用金</td><td>¥1,800（买入 5 层需 ¥1,529）</td></tr>
+  </table>
+
+  <h4 style="margin-top:14px;">512690 酒ETF — 仅卖出</h4>
+  <table>
+    <tr><td>持仓</td><td>5,000 股，成本 ¥0.420，现价 ¥0.416</td></tr>
+    <tr><td>卖出</td><td>+3.0%，5 层，700 股/格<br>¥0.428 / 0.441 / 0.454 / 0.468 / 0.482</td></tr>
+    <tr><td>目标</td><td>全部出清，回收 <strong>¥2,080</strong> → 动量子账户</td></tr>
+  </table>
+
+  <h4 style="margin-top:14px;">512010 医药ETF — 仅卖出</h4>
+  <table>
+    <tr><td>持仓</td><td>5,000 股，成本 ¥0.371，现价 ¥0.365</td></tr>
+    <tr><td>卖出</td><td>+3.0%，5 层，500 股/格<br>¥0.376 / 0.387 / 0.399 / 0.411 / 0.423</td></tr>
+    <tr><td>目标</td><td>全部出清，回收 <strong>¥1,825</strong> → 动量子账户</td></tr>
+  </table>
+</div>
+
+<div class="card">
+  <h3>📅 第二步：本周 — 减仓恒生科技</h3>
+  <table>
+    <tr><td>现有</td><td>13,100 股，成本 ¥0.578，现价 ¥0.585</td></tr>
+    <tr><td>问题</td><td>¥7,664 占组合 20.5%，超 20% 单标的上限</td></tr>
+    <tr><td>说明</td><td>减仓 ≠ 不看好。14 天内触发 12 次网格成交，是活跃收割品种。纯风控纪律</td></tr>
+    <tr><td>操作</td><td>市价卖出 3,000-5,000 股</td></tr>
+    <tr><td>保留</td><td>8,100-10,100 股（约占组合 13-16%）</td></tr>
+    <tr><td>回收</td><td><strong>¥1,755-2,925</strong> → 动量子账户</td></tr>
+  </table>
+</div>
+
+<div class="card">
+  <h3>⏳ 第三步：等回收后 — 启动动量信号</h3>
+
+  <h4>资金回收预估</h4>
+  <table>
+    <tr><th>来源</th><th class="num">金额</th><th>时效</th></tr>
+    <tr><td>513180 减仓</td><td class="num">¥1,755-2,925</td><td>立即</td></tr>
+    <tr><td>512690 清仓</td><td class="num">¥2,080</td><td>条件单触发后（数周）</td></tr>
+    <tr><td>512010 清仓</td><td class="num">¥1,825</td><td>条件单触发后（数周）</td></tr>
+    <tr><td>合计</td><td class="num" style="font-weight:700;">¥5,660-6,830</td><td></td></tr>
+  </table>
+
+  <div style="margin-top:10px;">
+    <strong>动量子账户可用资金：</strong><br>
+    现有现金 ¥5,000 + 减持回收 ¥5,660-6,830 = <strong>¥10,660-11,830</strong><br>
+    后续每月追加 ¥2,000-3,000，3-6 月达到 ¥20,000+
+  </div>
+
+  <h4 style="margin-top:14px;">动量操作</h4>
+  <pre><span class="c"># 每双周跑一次，收盘后</span>
+<span class="cmd">python3</span> tools/momentum_signal.py
+
+<span class="c"># 解读结果 → 执行</span>
+<span class="s">🟢 有信号</span> → 全仓买入信号指向的 ETF
+<span class="s">🔴 无信号</span> → 持币（当前就是无信号，三只全不通过）</pre>
+</div>
+
+<div class="card">
+  <h3>🏁 第四步：目标态（3-6 个月后）</h3>
+  <div class="fr">
+    <div class="fc">
+      <h4>网格子账户 ¥15,000-17,000</h4>
+      <ul style="font-size:0.88em; line-height:2; padding-left:18px;">
+        <li>512880 证券ETF ¥7,000-8,000 ← 双向条件单</li>
+        <li>159915 创业板 ¥2,000-3,000 ← 趋势反转后开双向</li>
+        <li>现金 ¥5,000-6,000 ← 网格备用金</li>
+      </ul>
+    </div>
+    <div class="fc">
+      <h4>动量子账户 ¥20,000+</h4>
+      <ul style="font-size:0.88em; line-height:2; padding-left:18px;">
+        <li>当前持币（等信号）</li>
+        <li>有信号时全仓 1 只（黄金/纳指/创业板 三选一）</li>
+        <li>无信号时 511880 货币ETF 打理</li>
+      </ul>
+    </div>
+    <div class="fc">
+      <h4>底仓层 ¥5,000-6,000</h4>
+      <ul style="font-size:0.88em; line-height:2; padding-left:18px;">
+        <li>510300 沪深300 ¥1,880 不动</li>
+        <li>159920 恒生ETF ¥4,698 不动</li>
+        <li>513180 恒生科技 ¥1,755-5,850 减仓后保留</li>
+      </ul>
+    </div>
+  </div>
+  <div style="text-align:center; margin-top:14px; font-weight:600;">总资产: ¥40,000-43,000（含新增资金）</div>
+</div>
+
+<hr>
+
+<!-- ====== MAINTENANCE ====== -->
+<h2>每周运维清单</h2>
+
+<div class="card">
+  <ul class="checklist">
+    <li><strong>📊 网格侧</strong></li>
+    <li><span class="chk"></span> 512880: 条件单触发? BB宽度____ 趋势____</li>
+    <li><span class="chk"></span> 159915: BB宽度____ 趋势____（≥-1 时开双向网格）</li>
+    <li><span class="chk"></span> 酒/医药: 卖出触发? → 回收现金划入动量</li>
+    <li><span class="chk"></span> 513180: 已减仓? 剩余____股</li>
+    <li><span class="chk"></span> 摩擦成本: 本月网格成交____笔，估算佣金____</li>
+    <li style="margin-top:8px;"><strong>🚀 动量侧（双周）</strong></li>
+    <li><span class="chk"></span> <code>python3 tools/momentum_signal.py</code></li>
+    <li><span class="chk"></span> 信号: ____ → 操作: ____</li>
+    <li><span class="chk"></span> 持币: ¥____ → 已买入货币ETF/逆回购? ____</li>
+    <li style="margin-top:8px;"><strong>🌐 共用</strong></li>
+    <li><span class="chk"></span> 总资产: ¥____（较上周 ±¥____）</li>
+    <li><span class="chk"></span> 现金/总资产: ____%（保持 > 20%）</li>
+    <li><span class="chk"></span> 动量闲置资金: ¥____（> 2 个月 → 转入货币ETF）</li>
+  </ul>
+</div>
+
+<hr>
+
+<!-- ====== RISK ====== -->
+<h2>风险联防</h2>
+
+<div class="card">
+  <h3>常规风控</h3>
+  <table>
+    <tr><th>检查项</th><th>触发条件</th><th>操作</th></tr>
+    <tr><td>总账户回撤</td><td>> 20%（从最高点算）</td><td>动量暂停买入，网格暂停加仓</td></tr>
+    <tr><td>网格浮亏 + 趋势恶化</td><td>浮亏 > 10% <strong>且</strong> BB宽度 > P75（近 252 日）</td><td>砍该只仓位 50%</td></tr>
+    <tr><td>动量连亏</td><td>连续 3 次完整买卖循环都亏损</td><td>暂停一个月，复盘参数</td></tr>
+    <tr><td>闲置资金</td><td>动量资金闲置 > 2 个月</td><td>转入 511880 货币 ETF</td></tr>
+  </table>
+</div>
+
+<div class="card">
+  <h3>尾部风险应对</h3>
+  <table>
+    <tr><th>场景</th><th>识别信号</th><th>应对</th></tr>
+    <tr><td><strong>动量崩溃</strong></td><td>连续 2 个窗口负超额（~6 个月）</td><td>动量资金减半，转入货币 ETF</td></tr>
+    <tr><td><strong>趋势反转</strong></td><td>持仓 ETF 高点回撤 > 20% + 跌破 MA60</td><td>不管信号，强制清仓</td></tr>
+    <tr><td><strong>极端波动</strong></td><td>池内所有 ETF 波动率 > 历史中位 × 2</td><td>暂停动量交易，全仓货币 ETF</td></tr>
+    <tr><td><strong>连续空仓</strong></td><td>无信号 > 3 个月</td><td>正常——策略在保护你。不要因为"钱闲着难受"降低标准</td></tr>
+  </table>
+</div>
+
+<div class="card">
+  <h3>闲置资金管理</h3>
+  <table>
+    <tr><th>方式</th><th class="num">年化</th><th>流动性</th><th>操作</th></tr>
+    <tr><td>国债逆回购</td><td class="num">~1.5-2.5%</td><td>T+1</td><td>每日 15:00 前券商 APP 操作 GC001</td></tr>
+    <tr><td>银华日利 511880</td><td class="num">~1.5-2.0%</td><td class="pass">T+0</td><td>买入即可，信号触发时卖出 → 换仓（即时到账）</td></tr>
+    <tr><td>华宝添益 511990</td><td class="num">~1.5-2.0%</td><td class="pass">T+0</td><td>同上，规模最大的场内货基</td></tr>
+  </table>
+  <div class="note" style="margin-top:6px;">⚠ 注意：货币 ETF 代码 511880 与黄金 ETF 518880 仅差一位，操作时避免混淆。</div>
+</div>
+
+<hr>
+
+<!-- ====== COMMANDS ====== -->
+<h2>常用命令</h2>
+
+<div class="card">
+<pre><span class="c"># === 动量信号（核心，双周） ===</span>
+<span class="cmd">python3</span> tools/momentum_signal.py
+
+<span class="c"># === 网格趋势 ===</span>
+<span class="cmd">python3</span> tools/grid_trading.py trend 512880
+<span class="cmd">python3</span> tools/grid_trading.py trend 159915
+
+<span class="c"># === 网格回测验证（每月） ===</span>
+<span class="cmd">python3</span> tools/grid_trading.py backtest 512880
+<span class="cmd">python3</span> tools/grid_trading.py tune 512880      <span class="c"># 参数优化</span>
+
+<span class="c"># === 估值检查 ===</span>
+<span class="cmd">python3</span> tools/ashare_data.py index 399975     <span class="c"># 证券公司</span>
+<span class="cmd">python3</span> tools/ashare_data.py index 399006     <span class="c"># 创业板</span>
+
+<span class="c"># === 回测验证（每月） ===</span>
+<span class="cmd">python3</span> tools/momentum_etf_backtest.py --rolling    <span class="c"># 25个滚动窗口（12月窗口，3月步长）</span>
+<span class="cmd">python3</span> tools/momentum_etf_backtest.py --batch
+
+<span class="c"># === 查看预设池 / 全市场选品复查（每季度） ===</span>
+<span class="cmd">python3</span> tools/momentum_etf_backtest.py --list-presets
+<span class="cmd">python3</span> tools/etf_screener.py</pre>
+</div>
+
+<hr>
+
+<!-- ====== SUMMARY ====== -->
+<div class="summary-box">
+  <h3>📌 一句话总结</h3>
+  <p style="font-size:0.94em; line-height:1.8;">
+    当前组合 31% 的资金（¥11,569 + 部分现金）可以释放给动量策略。<strong>三步走</strong>：设条件单（立即）→ 减恒生科技（本周）→ 等酒和医药卖出后，动量资金池达到 ¥15,000+。
+  </p>
+  <p style="font-size:0.9em; line-height:1.8; margin-top:8px;">
+    <strong>动量策略</strong> 3-ETF 池（黄金+纳指+创业板）8.2 年全周期回测年化 <span class="pass">+36.6%</span>，25/25 滚动窗口 80% 正超额。每双周收盘后跑一条命令，按信号执行。尾部风险存在（最差 -63.3%），全周期坚持才能吃到完整收益。
+  </p>
+  <p style="font-size:0.9em; line-height:1.8; margin-top:8px;">
+    <strong>网格策略</strong> 诚实面对：512880 6 年回测跑输 B&H（+11.3% vs +17.7%），本质是高 beta 趋势品种。当前参数维持不变，观察 1-2 月。ETF 佣金万 2.5 免五，摩擦成本 0.025%——可忽略。
+  </p>
+  <p style="font-size:0.9em; line-height:1.8; margin-top:8px;">
+    动量闲置资金买入 511880（货币 ETF），信号触发时卖出换仓，T+0 即时到账。
+  </p>
+  <p style="font-size:1em; font-weight:700; text-align:center; margin-top:14px;">
+    网格赚震荡，动量赚趋势。<br>市场不会同时是震荡和趋势，但总有一个策略在赚钱。
+  </p>
+</div>
+
+<div class="footnote">
+  数据源: 新浪财经 + AKShare + 腾讯 三方交叉验证 | 回测: tools/momentum_etf_backtest.py + tools/grid_trading.py<br>
+  审计: 6 轮交叉验证 (v1-v6)，终审 4.5/5 | 不构成投资建议
+</div>
+
+</div>
+</body>
+</html>

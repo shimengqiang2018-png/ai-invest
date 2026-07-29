@@ -1,0 +1,34 @@
+{
+  "expectations": [
+    {
+      "text": "Has 3+ HTML files",
+      "passed": false,
+      "evidence": "0 HTML files found: []"
+    },
+    {
+      "text": "Has 3+ PNG files",
+      "passed": true,
+      "evidence": "6 PNG files found: ['douyin_03_highlights.png', 'douyin_05_valuation.png', 'douyin_02_index_chart.png', 'douyin_04_sectors.png', 'douyin_06_summary.png']"
+    },
+    {
+      "text": "All PNGs are 1080×1920",
+      "passed": false,
+      "evidence": "douyin_03_highlights.png:1080x1920; douyin_05_valuation.png:1068x1068; douyin_02_index_chart.png:1066x1068; douyin_04_sectors.png:1080x1920; douyin_06_summary.png:1080x1080; douyin_01_cover.png:1080x1920"
+    },
+    {
+      "text": "HTML uses light theme",
+      "passed": false,
+      "evidence": "Light theme not detected"
+    },
+    {
+      "text": "Contains index market data",
+      "passed": false,
+      "evidence": "No index data"
+    },
+    {
+      "text": "Has data source / disclaimer",
+      "passed": false,
+      "evidence": "Not found"
+    }
+  ]
+}

@@ -1,0 +1,37 @@
+{
+  "eval_id": 1,
+  "eval_name": "basic-trigger",
+  "prompt": "复盘下今天的大盘，发抖音",
+  "assertions": [
+    {
+      "id": "a1",
+      "description": "生成至少3个HTML文件",
+      "check": "outputs目录中存在3个或以上.html文件"
+    },
+    {
+      "id": "a2",
+      "description": "生成至少3个PNG图片",
+      "check": "outputs目录中存在3个或以上.png文件"
+    },
+    {
+      "id": "a3",
+      "description": "PNG尺寸为1080×1920",
+      "check": "所有PNG图片尺寸均为1080×1920"
+    },
+    {
+      "id": "a4",
+      "description": "HTML使用亮色主题",
+      "check": "HTML中包含color-scheme: only light或color-scheme:light"
+    },
+    {
+      "id": "a5",
+      "description": "包含指数行情数据",
+      "check": "HTML中至少包含上证指数/深证成指/创业板指三个指数的数据"
+    },
+    {
+      "id": "a6",
+      "description": "数据来自脚本获取",
+      "check": "summary或输出中提及使用了ashare_data.py脚本"
+    }
+  ]
+}

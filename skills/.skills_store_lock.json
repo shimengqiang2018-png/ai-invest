@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "skills": {
+    "stock-analyze": {
+      "name": "股市分析",
+      "zip_url": "https://api.skillhub.cn/api/v1/download?slug=stock-analyze",
+      "source": "community",
+      "version": "1.0.0",
+      "installedAt": "2026-07-09T05:50:24Z"
+    },
+    "finance-index": {
+      "name": "finance-index-skill",
+      "zip_url": "https://api.skillhub.cn/api/v1/download?slug=finance-index",
+      "source": "community",
+      "version": "1.0.1",
+      "installedAt": "2026-07-09T05:52:31Z"
+    }
+  }
+}

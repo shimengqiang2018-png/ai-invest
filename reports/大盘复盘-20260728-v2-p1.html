@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="color-scheme" content="only light">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>A股复盘 ①</title>
+<style>
+  html { color-scheme: only light !important; }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body {
+    background: #f2f3f5 !important; color: #1a1a2e !important;
+    font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", sans-serif;
+    font-size: 14px; line-height: 1.5; padding: 36px;
+    max-width: 540px; margin: 0 auto;
+    -webkit-font-smoothing: antialiased;
+    display:flex; flex-direction:column; min-height:960px; justify-content:space-between;
+  }
+  .up { color:#e53e3e; } .down { color:#059669; }
+  .card {
+    background:#ffffff !important; border:1px solid #e5e7eb; border-radius:12px;
+    padding:16px 18px; margin-top:12px;
+  }
+  .card:first-child { margin-top:0; }
+  .card-title {
+    font-size:11px; font-weight:700; color:#9ca3af;
+    text-transform:uppercase; letter-spacing:1px; margin-bottom:12px;
+    display:flex; align-items:center; gap:6px;
+  }
+  .dot { width:6px; height:6px; border-radius:2px; display:inline-block; flex-shrink:0; }
+  .footer-text { text-align:center; font-size:9px; color:#d1d5db; }
+  .header { text-align:center; }
+  .header .date { font-size:11px; color:#9ca3af; letter-spacing:2px; }
+  .header h1 { font-size:26px; font-weight:800; color:#111827; margin:6px 0 2px; }
+  .header .sub { font-size:14px; color:#e53e3e; font-weight:500; }
+  .index-grid { display:grid; grid-template-columns:1fr 1fr; gap:6px; }
+  .index-item {
+    background:#f9fafb !important; border-radius:8px; padding:10px 12px;
+    display:flex; justify-content:space-between; align-items:center;
+  }
+  .index-item .name { font-size:13px; font-weight:600; color:#1f2937; }
+  .index-item .price { font-size:15px; font-weight:700; color:#111827; }
+  .index-item .change { font-size:12px; font-weight:700; }
+  .right { text-align:right; }
+  .pulse-row { display:flex; justify-content:space-around; text-align:center; }
+  .pulse-item .val { font-size:28px; font-weight:800; line-height:1.15; }
+  .pulse-item .label { font-size:11px; color:#6b7280; margin-top:2px; }
+  .split2 { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
+  .stat-box { border-radius:10px; padding:14px 16px; text-align:center; }
+  .stat-box .v { font-size:26px; font-weight:800; line-height:1.15; }
+  .stat-box .t { font-size:11px; color:#6b7280; margin-bottom:4px; }
+  .stat-box .sub { font-size:10px; color:#6b7280; margin-top:2px; }
+  .macro-row { display:flex; justify-content:space-around; text-align:center; margin-top:12px; padding-top:10px; border-top:1px solid #e5e7eb; }
+  .macro-item .m-val { font-size:20px; font-weight:800; }
+  .macro-item .m-label { font-size:10px; color:#6b7280; margin-top:1px; }
+  @media (prefers-color-scheme: dark) {
+    html, body { background-color: #f2f3f5 !important; }
+    .card, .index-item, .stat-box { background-color: #ffffff !important; }
+    body, .card, h1, .index-item .name { color: #1a1a2e !important; }
+  }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <div class="date">2026 / 07 / 28 · 周二 · 截至午盘</div>
+  <h1>A股市场复盘</h1>
+  <div class="sub">全球AI恐慌传导 · 创业板暴跌5.37% · 光刻机逆势涨停潮</div>
+</div>
+
+<div class="card">
+  <div class="card-title"><span class="dot" style="background:#e53e3e"></span>主要指数行情</div>
+  <div class="index-grid">
+    <div class="index-item" style="background:#ecfdf5 !important">
+      <span class="name">上证指数</span>
+      <div class="right"><div class="price">3,820.52</div><div class="change down">-0.98%</div></div>
+    </div>
+    <div class="index-item" style="background:#ecfdf5 !important">
+      <span class="name">上证50</span>
+      <div class="right"><div class="price">2,920.89</div><div class="change down">-1.00%</div></div>
+    </div>
+    <div class="index-item">
+      <span class="name">中证1000</span>
+      <div class="right"><div class="price">7,078.43</div><div class="change down">-2.08%</div></div>
+    </div>
+    <div class="index-item">
+      <span class="name">沪深300</span>
+      <div class="right"><div class="price">4,596.76</div><div class="change down">-2.25%</div></div>
+    </div>
+    <div class="index-item">
+      <span class="name">中证500</span>
+      <div class="right"><div class="price">7,512.26</div><div class="change down">-2.70%</div></div>
+    </div>
+    <div class="index-item">
+      <span class="name">深证成指</span>
+      <div class="right"><div class="price">13,664.80</div><div class="change down">-3.42%</div></div>
+    </div>
+    <div class="index-item" style="background:#fef2f2 !important">
+      <span class="name">科创50</span>
+      <div class="right"><div class="price">1,735.01</div><div class="change down">-4.03%</div></div>
+    </div>
+    <div class="index-item" style="background:#fef2f2 !important">
+      <span class="name">创业板指</span>
+      <div class="right"><div class="price">3,397.97</div><div class="change down">-5.37%</div></div>
+    </div>
+  </div>
+  <div style="font-size:10px;color:#6b7280;margin-top:6px;text-align:center">
+    最强 vs 最弱剪刀差 <span style="color:#e53e3e;font-weight:700">4.37%</span> · 权重重挫 微盘抗跌 黄白线严重背离
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-title"><span class="dot" style="background:#059669"></span>市场情绪 · 截至午盘</div>
+  <div class="pulse-row">
+    <div class="pulse-item"><div class="val" style="color:#e53e3e">2,836</div><div class="label">上涨家数</div></div>
+    <div class="pulse-item"><div class="val" style="color:#111827">2,521</div><div class="label">下跌家数</div></div>
+    <div class="pulse-item"><div class="val" style="color:#2563eb">13,366<span style="font-size:12px">亿</span></div><div class="label">三市成交*</div></div>
+    <div class="pulse-item"><div class="val" style="color:#d97706">63<span style="font-size:12px">/</span>12</div><div class="label">涨停/跌停*</div></div>
+    <div style="font-size:10px;color:#6b7280;text-align:center;margin-top:8px">
+      较昨日同期缩量 <span style="color:#059669;font-weight:700">205亿</span>
+    </div>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-title"><span class="dot" style="background:#d97706"></span>风格特征 &amp; 宏观速览</div>
+  <div class="split2">
+    <div class="stat-box" style="background:#ecfdf5 !important; border:1px solid #a7f3d0">
+      <div class="t">🛡️ 最强指数</div>
+      <div class="v" style="color:#111827">上证50</div>
+      <div class="sub" style="color:#059669">-1.00% · 银行护盘</div>
+    </div>
+    <div class="stat-box" style="background:#fef2f2 !important; border:1px solid #fecaca">
+      <div class="t">💥 最弱指数</div>
+      <div class="v" style="color:#e53e3e">创业板指</div>
+      <div class="sub" style="color:#e53e3e">-5.37% · AI算力崩盘</div>
+    </div>
+  </div>
+  <div style="font-size:13px;color:#1f2937;text-align:center;margin-top:10px;font-weight:700">
+    风格剪刀差 <span style="color:#e53e3e">4.37%</span> · 红利防御 vs AI成长 · 资金从算力链大规模撤出
+  </div>
+  <div class="macro-row">
+    <div class="macro-item"><div class="m-val" style="color:#111827">6.77</div><div class="m-label">USD/CNY · 人民币稳定</div></div>
+    <div class="macro-item"><div class="m-val" style="color:#d97706">美油-7.5%</div><div class="m-label">WTI原油重挫</div></div>
+    <div class="macro-item"><div class="m-val" style="color:#e53e3e">韩KOSPI-6%</div><div class="m-label">亚太市场联动下跌</div></div>
+  </div>
+</div>
+
+<div class="footer-text">
+  数据来源：ashare_data.py · Wind（新浪）· 证券时报 &nbsp;|&nbsp; * 成交额/涨停跌停为单源数据 &nbsp;|&nbsp; 仅供参考，不构成投资建议 &nbsp;|&nbsp; 1/3
+</div>
+</body>
+</html>

@@ -1,0 +1,435 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>RSRS v2.1 五条件对齐版 — 全维度审计</title>
+<script src="https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js"></script>
+<style>
+  :root {
+    --bg: #1a1a2e;
+    --card: #16213e;
+    --card2: #0f3460;
+    --text: #e0e0e0;
+    --text2: #aaa;
+    --green: #00b894;
+    --red: #e74c3c;
+    --yellow: #f39c12;
+    --accent: #3498db;
+    --pass: #27ae60;
+    --warn: #e67e22;
+    --fail: #e74c3c;
+    --border: #2a2a4a;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { 
+    background: var(--bg); color: var(--text); 
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    line-height: 1.6; padding: 24px;
+  }
+  h1 { font-size: 1.8em; margin-bottom: 4px; }
+  h2 { font-size: 1.3em; margin: 28px 0 14px; padding-bottom: 6px; border-bottom: 2px solid var(--border); }
+  h3 { font-size: 1.05em; margin: 18px 0 8px; color: var(--accent); }
+  .meta { color: var(--text2); font-size: 0.85em; margin-bottom: 20px; }
+  .score-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin: 16px 0; }
+  .score-card { 
+    background: var(--card); border-radius: 10px; padding: 16px; text-align: center; 
+    border: 1px solid var(--border);
+  }
+  .score-card .label { font-size: 0.8em; color: var(--text2); margin-bottom: 4px; }
+  .score-card .value { font-size: 2em; font-weight: 700; }
+  .score-card .sub { font-size: 0.75em; color: var(--text2); margin-top: 4px; }
+  .pass-color { color: var(--pass); }
+  .warn-color { color: var(--warn); }
+  .fail-color { color: var(--fail); }
+
+  table { width: 100%; border-collapse: collapse; margin: 12px 0; font-size: 0.9em; }
+  th, td { padding: 8px 12px; text-align: left; border-bottom: 1px solid var(--border); }
+  th { background: var(--card2); color: var(--accent); font-weight: 600; }
+  tr:hover { background: rgba(255,255,255,0.03); }
+  td.right { text-align: right; }
+  td.center { text-align: center; }
+
+  .finding { 
+    border-left: 4px solid var(--fail); padding: 12px 16px; margin: 12px 0;
+    background: rgba(231, 76, 60, 0.08); border-radius: 0 8px 8px 0;
+  }
+  .finding.p1 { border-left-color: var(--warn); background: rgba(230, 126, 34, 0.08); }
+  .finding.info { border-left-color: var(--accent); background: rgba(52, 152, 219, 0.08); }
+  .badge { 
+    display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 0.75em; font-weight: 700;
+    margin-right: 6px;
+  }
+  .badge.p0 { background: var(--fail); color: #fff; }
+  .badge.p1 { background: var(--warn); color: #fff; }
+  .badge.pass { background: var(--pass); color: #fff; }
+  .badge.info { background: var(--accent); color: #fff; }
+
+  .chart-row { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin: 16px 0; }
+  .chart-box { background: var(--card); border-radius: 10px; padding: 12px; border: 1px solid var(--border); }
+  .chart-inner { width: 100%; height: 320px; }
+
+  .check-list { list-style: none; padding: 0; }
+  .check-list li { padding: 6px 0; display: flex; align-items: center; gap: 8px; }
+  .check-list .icon { font-size: 1.2em; }
+
+  .summary-box {
+    background: var(--card); border-radius: 12px; padding: 20px; 
+    border: 2px solid var(--accent); margin: 20px 0;
+  }
+  .summary-box h3 { margin-top: 0; }
+
+  .highlight { background: rgba(52,152,219,0.15); padding: 2px 6px; border-radius: 3px; }
+  .highlight-warn { background: rgba(243,156,18,0.15); padding: 2px 6px; border-radius: 3px; }
+  .highlight-fail { background: rgba(231,76,60,0.15); padding: 2px 6px; border-radius: 3px; }
+</style>
+</head>
+<body>
+
+<h1>RSRS v2.1 动量轮动策略 — 全维度专业审计</h1>
+<div class="meta">审计日期: 2026-07-28 | 版本: v2.1 五条件对齐版 | 审计范围: 数据/脚本/策略/结论</div>
+
+<div class="score-grid">
+  <div class="score-card">
+    <div class="label">数据准确度</div>
+    <div class="value pass-color">85%</div>
+    <div class="sub">核心指标 ✓ | 1 处 P0 不一致</div>
+  </div>
+  <div class="score-card">
+    <div class="label">脚本正确度</div>
+    <div class="value pass-color">95%</div>
+    <div class="sub">过滤器对齐 ✓ | 逻辑一致</div>
+  </div>
+  <div class="score-card">
+    <div class="label">策略逻辑</div>
+    <div class="value pass-color">80%</div>
+    <div class="sub">框架合理 | 池子数据挖掘</div>
+  </div>
+  <div class="score-card">
+    <div class="label">结论可靠性</div>
+    <div class="value pass-color">85%</div>
+    <div class="sub">诚实修正严谨 | 预期合理</div>
+  </div>
+</div>
+
+<!-- ========== 一、数据准确度 ========== -->
+<h2>一、数据准确度</h2>
+
+<h3>1.1 核心回测指标 — 100% 可复现</h3>
+<table>
+<tr><th>指标</th><th>文档声称</th><th>实际回测</th><th class="center">判定</th></tr>
+<tr><td>总收益率</td><td class="right">+688.7%</td><td class="right">+688.7%</td><td class="center"><span class="badge pass">✓ 一致</span></td></tr>
+<tr><td>年化收益</td><td class="right">+28.5%</td><td class="right">+28.5%</td><td class="center"><span class="badge pass">✓ 一致</span></td></tr>
+<tr><td>超额收益</td><td class="right">+609.0%</td><td class="right">+609.0%</td><td class="center"><span class="badge pass">✓ 一致</span></td></tr>
+<tr><td>交易次数</td><td class="right">199次 (100买+99卖)</td><td class="right">199次 (100买+99卖)</td><td class="center"><span class="badge pass">✓ 一致</span></td></tr>
+<tr><td>胜率</td><td class="right">62%</td><td class="right">62% (61/99)</td><td class="center"><span class="badge pass">✓ 一致</span></td></tr>
+<tr><td>双周Sharpe</td><td class="right">—</td><td class="right">1.54</td><td class="center"><span class="badge info">补充</span></td></tr>
+<tr><td>双周年化波动</td><td class="right">—</td><td class="right">16.9%</td><td class="center"><span class="badge info">补充</span></td></tr>
+<tr><td>双周MaxDD</td><td class="right">—</td><td class="right">12.0%</td><td class="center"><span class="badge info">补充</span></td></tr>
+</table>
+
+<h3>1.2 滚动窗口验证 — 25/25 精确匹配</h3>
+<table>
+<tr><th>指标</th><th>文档声称</th><th>实际回测</th><th class="center">判定</th></tr>
+<tr><td>正收益窗口</td><td class="right">23/25 (92%)</td><td class="right">23/25 (92%)</td><td class="center"><span class="badge pass">✓</span></td></tr>
+<tr><td>正超额窗口</td><td class="right">21/25 (84%)</td><td class="right">21/25 (84%)</td><td class="center"><span class="badge pass">✓</span></td></tr>
+<tr><td>平均超额/窗口</td><td class="right">+51.7%</td><td class="right">+51.7%</td><td class="center"><span class="badge pass">✓</span></td></tr>
+<tr><td>最差窗口</td><td class="right">-61.3%</td><td class="right">-61.3%</td><td class="center"><span class="badge pass">✓</span></td></tr>
+<tr><td>近似Sharpe</td><td class="right">1.11</td><td class="right">1.11</td><td class="center"><span class="badge pass">✓</span></td></tr>
+</table>
+<p>4 个负超额窗口的日期、策略收益、基准收益、超额幅度 <strong>全部一致</strong>。</p>
+
+<h3>1.3 IC/IR 因子验证 — 全部一致</h3>
+<table>
+<tr><th>前向窗口</th><th>条件 IC (文档)</th><th>条件 IC (实际)</th><th>全样本 IC (文档)</th><th>全样本 IC (实际)</th><th class="center">判定</th></tr>
+<tr><td>10 日</td><td class="right">0.074</td><td class="right">0.0743</td><td class="right">0.070</td><td class="right">0.0704</td><td class="center"><span class="badge pass">✓</span></td></tr>
+<tr><td>20 日</td><td class="right">0.028</td><td class="right">0.0282</td><td class="right">0.064</td><td class="right">0.0644</td><td class="center"><span class="badge pass">✓</span></td></tr>
+<tr><td>40 日</td><td class="right">-0.030</td><td class="right">-0.0299</td><td class="right">0.028</td><td class="right">0.0275</td><td class="center"><span class="badge pass">✓</span></td></tr>
+</table>
+
+<h3>1.4 压力测试 — 全部一致</h3>
+<table>
+<tr><th>情景</th><th>资产回撤 (文档)</th><th>资产回撤 (实际)</th><th>策略收益 (文档)</th><th>策略收益 (实际)</th><th class="center">判定</th></tr>
+<tr><td>纳指暴跌</td><td class="right">-85.5%</td><td class="right">-85.5%</td><td class="right">+10.1%</td><td class="right">+10.1%</td><td class="center"><span class="badge pass">✓</span></td></tr>
+<tr><td>创业板崩盘</td><td class="right">-56.6%</td><td class="right">-56.6%</td><td class="right">+53.0%</td><td class="right">+53.0%</td><td class="center"><span class="badge pass">✓</span></td></tr>
+<tr><td>恒生阴跌</td><td class="right">-47.3%</td><td class="right">-47.3%</td><td class="right">+184.5%</td><td class="right">+184.5%</td><td class="center"><span class="badge pass">✓</span></td></tr>
+<tr><td>黄金回调</td><td class="right">-30.5%</td><td class="right">-30.5%</td><td class="right">-3.7%</td><td class="right">-3.7%</td><td class="center"><span class="badge pass">✓</span></td></tr>
+</table>
+
+<h3>1.5 日频风险指标 — 基本一致 (微小舍入差异)</h3>
+<table>
+<tr><th>指标</th><th>文档</th><th>实际</th><th>差异</th><th class="center">判定</th></tr>
+<tr><td>年化波动率</td><td class="right">17.9%</td><td class="right">18.0%</td><td class="right">+0.1pp</td><td class="center"><span class="badge pass">✓</span></td></tr>
+<tr><td>最大回撤</td><td class="right">16.2%</td><td class="right">16.2%</td><td class="right">0</td><td class="center"><span class="badge pass">✓</span></td></tr>
+<tr><td>Sharpe Ratio</td><td class="right">1.40</td><td class="right">1.41</td><td class="right">+0.01</td><td class="center"><span class="badge pass">✓</span></td></tr>
+<tr><td>Sortino Ratio</td><td class="right">1.30</td><td class="right">1.32</td><td class="right">+0.02</td><td class="center"><span class="badge pass">✓</span></td></tr>
+<tr><td>Calmar Ratio</td><td class="right">1.83</td><td class="right">1.86</td><td class="right">+0.03</td><td class="center"><span class="badge pass">✓</span></td></tr>
+<tr><td>偏度</td><td class="right">0.225</td><td class="right">0.221</td><td class="right">-0.004</td><td class="center"><span class="badge pass">✓</span></td></tr>
+<tr><td>超额峰度</td><td class="right">3.10</td><td class="right">3.03</td><td class="right">-0.07</td><td class="center"><span class="badge pass">✓</span></td></tr>
+<tr><td>VaR (95% 日)</td><td class="right">-1.66%</td><td class="right">-1.66%</td><td class="right">0</td><td class="center"><span class="badge pass">✓</span></td></tr>
+<tr><td>CVaR (95% 日)</td><td class="right">-2.47%</td><td class="right">-2.48%</td><td class="right">-0.01pp</td><td class="center"><span class="badge pass">✓</span></td></tr>
+</table>
+
+<h3>1.6 ❌ P0: ETF 贡献表格数据错误 (L101-106)</h3>
+<div class="finding">
+  <p><span class="badge p0">P0</span> <strong>文档 L101-L106 的"各 ETF 贡献"表格数据与实际回测输出不一致。</strong></p>
+</div>
+
+<table>
+<tr><th>ETF</th><th>文档"选中"</th><th>实际卖出次数</th><th>文档盈亏</th><th>实际盈亏</th><th>文档胜率</th><th>实际胜率</th></tr>
+<tr><td>159915 创业板</td><td class="right">20 次</td><td class="right">25 次</td><td class="right">+¥389,128</td><td class="right">+¥354,491</td><td class="right">65%</td><td class="right"><span class="highlight-fail">60%</span></td></tr>
+<tr><td>513100 纳指</td><td class="right">17 次</td><td class="right">29 次</td><td class="right">+¥107,511</td><td class="right">+¥118,943</td><td class="right">65%</td><td class="right">66%</td></tr>
+<tr><td>518880 黄金</td><td class="right">18 次</td><td class="right">26 次</td><td class="right">+¥102,475</td><td class="right">+¥163,689</td><td class="right">61%</td><td class="right">65%</td></tr>
+<tr><td>159920 恒生</td><td class="right">12 次</td><td class="right">19 次</td><td class="right">+¥78,960</td><td class="right">+¥38,923</td><td class="right">67%</td><td class="right"><span class="highlight-fail">53%</span></td></tr>
+</table>
+
+<p>四只合计 <strong>文档 678,074 vs 实际 676,046</strong>（总额接近但归属错配）。该表格与 v2.0 cap=5 版本（3过滤器）的数据完全不同，也与当前 v2.1 五条件版的实际输出不符。可能是手动截断数据时的归属归因方式不同。选中次数和盈亏金额需要与回测脚本输出对齐。</p>
+
+<div class="chart-row">
+  <div class="chart-box">
+    <h3 style="font-size:0.9em;margin-bottom:8px">ETF 选中次数: 文档 vs 实际</h3>
+    <div class="chart-inner" id="chart-etf-count"></div>
+  </div>
+  <div class="chart-box">
+    <h3 style="font-size:0.9em;margin-bottom:8px">ETF 盈亏贡献: 文档 vs 实际</h3>
+    <div class="chart-inner" id="chart-etf-pnl"></div>
+  </div>
+</div>
+
+<!-- ========== 二、脚本正确度 ========== -->
+<h2>二、脚本正确度</h2>
+
+<h3>2.1 回测引擎 — 五条件对齐确认 ✅</h3>
+
+<div class="finding info">
+  <p><span class="badge pass">PASS</span> <strong>回测引擎 <code>check_signal()</code> 已对齐实盘扫描器的全部五个条件。</strong></p>
+</div>
+
+<p>代码审查确认 (<code>momentum_etf_backtest.py:326-398</code>)：</p>
+<table>
+<tr><th>#</th><th>条件</th><th>回测引擎</th><th>实盘扫描器</th><th class="center">对齐</th></tr>
+<tr><td>①</td><td>RSRS > 0</td><td><code>if rsrs_score <= 0: return None</code></td><td><code>rsrs_score > 0</code></td><td class="center"><span class="badge pass">✓</span></td></tr>
+<tr><td>②</td><td>Close > MA20</td><td><code>if current_close <= ma_val: return None</code></td><td><code>above_ma20</code></td><td class="center"><span class="badge pass">✓</span></td></tr>
+<tr><td>③</td><td>波动率 ≤ 中位×1.5</td><td><code>if current_vol > median_vol * 1.5: return None</code></td><td><code>vol_ok</code></td><td class="center"><span class="badge pass">✓</span></td></tr>
+<tr><td>④</td><td>成交量 ≤ 5日均量×2.5</td><td><code>if today_vol / avg_vol_5d > 2.5: return None</code></td><td><code>not volume_surge</code></td><td class="center"><span class="badge pass">✓</span></td></tr>
+<tr><td>⑤</td><td>RSI(14) ≤ 80</td><td><code>if rsi > 80: return None</code></td><td><code>not rsi_overbought</code></td><td class="center"><span class="badge pass">✓</span></td></tr>
+</table>
+
+<p>回测引擎额外实现了<strong>双均线多头 bonus</strong>（辅助字段，不参与过滤）和简单涨幅（仅展示），与扫描器的信号分级逻辑一致。</p>
+
+<h3>2.2 RSI 计算逻辑 — 双方一致 ✅</h3>
+<p>回测引擎 (<code>line 374-389</code>) 和扫描器 (<code>line 291-308</code>) 均使用标准的 14 日 RSI 公式，逻辑完全相同。</p>
+
+<h3>2.3 成交量异动检测 — 细微差异 ⚠️</h3>
+<div class="finding p1">
+  <p><span class="badge p1">P1</span> <strong>成交量计算存在细微实现差异，但功能等价。</strong></p>
+  <p>回测引擎: 直接用 <code>volumes[-6:-1]</code> 计算 5 日均量；扫描器: 通过 <code>calc_volume_ratio()</code> 函数。结果等价——均检测今日量/5日均量 > 2.5x。非结构性差异。</p>
+</div>
+
+<!-- ========== 三、策略逻辑 ========== -->
+<h2>三、策略逻辑</h2>
+
+<h3>3.1 因子设计 — 合理 ✅</h3>
+<ul class="check-list">
+  <li><span class="icon pass-color">✓</span> RSRS = 斜率 × R²，有"趋势强度 × 趋势质量"的经济含义</li>
+  <li><span class="icon pass-color">✓</span> cap=50 解决问题了 v2.0 的 91% 信号并列问题</li>
+  <li><span class="icon warn-color">⚠</span> 20 日窗口的预测力偏弱 (条件 IC=0.028, 全样本 IC=0.064)</li>
+  <li><span class="icon pass-color">✓</span> 核心价值在"要不要买"而非"选哪个"——全样本 IC 分析揭示了这个真相</li>
+</ul>
+
+<h3>3.2 五条件过滤器 — 合理 ✅</h3>
+<table>
+<tr><th>过滤器</th><th>作用</th><th>合理性</th></tr>
+<tr><td>RSRS > 0</td><td>趋势方向确认</td><td>基础门槛</td></tr>
+<tr><td>Close > MA20</td><td>多头排列确认</td><td>趋势跟踪经典条件</td></tr>
+<tr><td>波动率 ≤ 中位×1.5</td><td>防过热追顶</td><td>波动率均值回归</td></tr>
+<tr><td>成交量 ≤ 5日均量×2.5</td><td>防放量异动</td><td>阻止高位接盘</td></tr>
+<tr><td>RSI(14) ≤ 80</td><td>防超买</td><td>标准技术过滤</td></tr>
+</table>
+<p>五个条件之间有一定协同但非完全冗余：成交量独立于价格动量，RSI 独立于趋势回归。相比 v2.0 的三条件版，增加了两个不同维度的过滤器。</p>
+
+<h3>3.3 池子选择 — 数据挖掘 ⚠️</h3>
+<div class="finding p1">
+  <p><span class="badge p1">P1</span> <strong>4-ETF 推荐池从 1,164 个组合中按 Sharpe 选出。</strong>虽然滚动窗口 84% 正超额提供了部分防御，但 out-of-sample 验证仅覆盖了 8 年数据的一次 walk-forward，而非多轮交叉验证。池子的过度拟合风险依然存在。</p>
+</div>
+
+<h3>3.4 仓位管理 — 单资产集中 ⚠️</h3>
+<div class="finding p1">
+  <p><span class="badge p1">P1</span> <strong>动量仓位全仓集中在 1 只 ETF。</strong>虽然跨资产分散了轮动标的，但任意时刻的持仓是单点的。这意味着如果该 ETF 出现个股特异性风险（如跟踪误差、流动性危机），策略没有分散保护。</p>
+</div>
+
+<!-- ========== 四、结论可靠性 ========== -->
+<h2>四、结论可靠性</h2>
+
+<h3>4.1 诚实修正 — 严谨坦诚 ✅</h3>
+<div class="finding info">
+  <p><span class="badge pass">PASS</span> <strong>文档"诚实修正"部分（L132-146）将 7 个偏差来源逐一标注状态。</strong>3 项已修复、4 项亮明。这在个人投资者的策略文档中非常罕见，值得肯定。</p>
+</div>
+
+<table>
+<tr><th>偏差来源</th><th>影响</th><th class="center">状态</th></tr>
+<tr><td>回测/实盘过滤器不一致</td><td>系统性高估 ~303pp</td><td class="center"><span class="badge pass">✅ 已修复</span></td></tr>
+<tr><td>IC/IR 仅算条件 IC</td><td>低估因子真实预测力</td><td class="center"><span class="badge pass">✅ 已修复</span></td></tr>
+<tr><td>双周采样虚高 Sharpe</td><td>遗漏日间波动</td><td class="center"><span class="badge info">已标注</span></td></tr>
+<tr><td>无交易成本建模</td><td>滑点未计入</td><td class="center"><span class="badge info">已标注</span></td></tr>
+<tr><td>信号-执行无时滞</td><td>用收盘价成交</td><td class="center"><span class="badge info">已标注</span></td></tr>
+<tr><td>选池数据挖掘</td><td>存在过拟合风险</td><td class="center"><span class="badge info">已标注</span></td></tr>
+</table>
+
+<h3>4.2 年化预期 — 合理 ✅</h3>
+<p>文档预期真实年化 20-24%，滚动 Sharpe ~1.1。基于以下逻辑：</p>
+<ul class="check-list">
+  <li><span class="icon pass-color">✓</span> 五条件全周期回测 28.5% → 扣除成本 ~0.5pp → 扣除信号时滞 + 数据挖掘折扣 → 22-24%</li>
+  <li><span class="icon pass-color">✓</span> 滚动窗口 Sharpe 1.11 提供了下界参考</li>
+  <li><span class="icon pass-color">✓</span> MaxDD 按 16% 日频基准规划（非双周的 12%），保守且诚实</li>
+</ul>
+
+<h3>4.3 执行可行性 — 良好 ✅</h3>
+<ul class="check-list">
+  <li><span class="icon pass-color">✓</span> 双周调仓频率对散户完全可行</li>
+  <li><span class="icon pass-color">✓</span> 命令行工具提供了每日监测 + 深度扫描的两级使用</li>
+  <li><span class="icon pass-color">✓</span> 无信号时持币或转入 511880 的闲置资金管理方案完整</li>
+  <li><span class="icon pass-color">✓</span> 资金分离规则清晰（网格/动量/底仓三层）</li>
+</ul>
+
+<div class="chart-box" style="margin:16px 0">
+  <h3 style="font-size:0.9em;margin-bottom:8px">滚动窗口收益分布 — 文档数据 vs 实际回测</h3>
+  <div class="chart-inner" id="chart-rolling"></div>
+</div>
+
+<!-- ========== 五、总结 ========== -->
+<h2>五、总结</h2>
+
+<div class="summary-box">
+  <h3>审计总评: 86/100</h3>
+  <p>RSRS v2.1 五条件对齐版是一次<strong>质的飞跃</strong>。v2.0→v2.1 的两步修复（cap=50 + 过滤器对齐）解决了之前审计发现的两个 P0 级问题。当前版本的回测引擎与实盘扫描器在信号生成逻辑上已完全对齐，不再存在之前 ~303pp 的系统性高估。</p>
+  
+  <p style="margin-top:12px"><strong>主要发现:</strong></p>
+  <ul class="check-list">
+    <li><span class="icon pass-color">✓</span> <strong>核心指标 100% 可复现</strong>：总收益 688.7%、年化 28.5%、199 笔交易、62% 胜率</li>
+    <li><span class="icon pass-color">✓</span> <strong>滚动窗口 25/25 精确匹配</strong>：每个窗口的策略收益、基准收益、超额收益全部一致</li>
+    <li><span class="icon pass-color">✓</span> <strong>IC/IR + 压力测试全部一致</strong>：条件 IC、全样本 IC、4 个极端情景全部匹配</li>
+    <li><span class="icon pass-color">✓</span> <strong>过滤器对齐已确认</strong>：回测引擎和实盘扫描器的 5 个过滤条件完全一致</li>
+    <li><span class="icon fail-color">✗</span> <strong>ETF 贡献表格 (L101-106) 需修正</strong>：4 只 ETF 的选中次数、盈亏、胜率均不正确</li>
+  </ul>
+
+  <p style="margin-top:12px"><strong>待修正项:</strong></p>
+  <table>
+    <tr><th>位置</th><th>当前</th><th>应为</th></tr>
+    <tr><td>L102 创业板 选中</td><td>20 次</td><td>25 次</td></tr>
+    <tr><td>L102 创业板 盈亏</td><td>+¥389,128</td><td>+¥354,491</td></tr>
+    <tr><td>L102 创业板 胜率</td><td>65%</td><td>60%</td></tr>
+    <tr><td>L103 纳指 选中</td><td>17 次</td><td>29 次</td></tr>
+    <tr><td>L103 纳指 盈亏</td><td>+¥107,511</td><td>+¥118,943</td></tr>
+    <tr><td>L104 黄金 选中</td><td>18 次</td><td>26 次</td></tr>
+    <tr><td>L104 黄金 盈亏</td><td>+¥102,475</td><td>+¥163,689</td></tr>
+    <tr><td>L105 恒生 选中</td><td>12 次</td><td>19 次</td></tr>
+    <tr><td>L105 恒生 盈亏</td><td>+¥78,960</td><td>+¥38,923</td></tr>
+    <tr><td>L105 恒生 胜率</td><td>67%</td><td>53%</td></tr>
+  </table>
+
+  <p style="margin-top:12px; color: var(--text2); font-size: 0.9em;">
+    判定: 该策略文档在经过 v2.0→v2.1 的两步修复后，核心逻辑已从"信号失真"升级为"诚实稳健"。
+    剩余的唯一 P0 问题（ETF 贡献表）是数据归属层面的非结构性错误——不影响策略可用性，但影响信息准确性。
+    修正好这 10 个数字后，文档将是一个在个人量化投资者中极少见的、经得起专业审查的策略方案。
+  </p>
+</div>
+
+<script>
+(function() {
+  // Chart 1: ETF 选中次数对比
+  (function() {
+    var dom = document.getElementById('chart-etf-count');
+    var chart = echarts.init(dom);
+    chart.setOption({
+      tooltip: { trigger: 'axis' },
+      legend: { data: ['文档选中', '实际卖出'], bottom: 0, textStyle: { color: '#aaa' } },
+      grid: { top: 20, bottom: 40, left: 50, right: 20 },
+      xAxis: { type: 'category', data: ['创业板', '纳指', '黄金', '恒生'], axisLabel: { color: '#aaa' } },
+      yAxis: { type: 'value', axisLabel: { color: '#aaa' } },
+      series: [
+        { name: '文档选中', type: 'bar', data: [20, 17, 18, 12], itemStyle: { color: '#3498db' } },
+        { name: '实际卖出', type: 'bar', data: [25, 29, 26, 19], itemStyle: { color: '#e74c3c' } }
+      ]
+    });
+  })();
+
+  // Chart 2: ETF 盈亏贡献对比
+  (function() {
+    var dom = document.getElementById('chart-etf-pnl');
+    var chart = echarts.init(dom);
+    chart.setOption({
+      tooltip: { trigger: 'axis', valueFormatter: function(v) { return '¥' + (v/10000).toFixed(1) + '万'; } },
+      legend: { data: ['文档盈亏', '实际盈亏'], bottom: 0, textStyle: { color: '#aaa' } },
+      grid: { top: 20, bottom: 40, left: 70, right: 20 },
+      xAxis: { type: 'category', data: ['创业板', '纳指', '黄金', '恒生'], axisLabel: { color: '#aaa' } },
+      yAxis: { type: 'value', axisLabel: { color: '#aaa', formatter: function(v) { return (v/10000).toFixed(0) + '万'; } } },
+      series: [
+        { name: '文档盈亏', type: 'bar', data: [389128, 107511, 102475, 78960], itemStyle: { color: '#3498db' } },
+        { name: '实际盈亏', type: 'bar', data: [354491, 118943, 163689, 38923], itemStyle: { color: '#e74c3c' } }
+      ]
+    });
+  })();
+
+  // Chart 3: Rolling window comparison
+  (function() {
+    var dom = document.getElementById('chart-rolling');
+    var chart = echarts.init(dom);
+
+    var windows = [
+      '19Q2-20Q2','19Q3-20Q3','19Q4-20Q4','20Q1-21Q1','20Q2-21Q2',
+      '20Q3-21Q3','20Q4-21Q4','21Q1-22Q1','21Q2-22Q2','21Q3-22Q3',
+      '21Q4-22Q4','22Q1-23Q1','22Q2-23Q2','22Q3-23Q3','22Q4-23Q4',
+      '23Q1-24Q1','23Q2-24Q2','23Q3-24Q3','23Q4-24Q4','24Q1-25Q1',
+      '24Q2-25Q2','24Q3-25Q3','24Q4-25Q4','25Q1-26Q1','25Q2-26Q2'
+    ];
+
+    var strategy = [
+      134.2,46.5,51.2,52.1,-41.9,-42.9,41.2,32.2,113.5,179.4,
+      124.6,56.9,181.5,49.7,9.9,92.2,36.3,20.4,100.8,35.2,
+      18.6,106.7,93.3,52.9,45.5
+    ];
+
+    var benchmark = [
+      25.7,36.5,26.4,32.2,19.4,9.3,9.3,-28.6,-30.2,-31.0,
+      -34.1,-2.9,3.3,8.8,11.5,-0.2,9.5,2.8,23.3,31.9,
+      20.3,36.0,40.1,38.5,39.7
+    ];
+
+    var excess = [
+      108.5,10.0,24.8,19.9,-61.3,-52.2,31.8,60.7,143.8,210.5,
+      158.7,59.8,178.2,40.9,-1.6,92.4,26.8,17.6,77.5,3.3,
+      -1.7,70.7,53.3,14.4,5.9
+    ];
+
+    chart.setOption({
+      tooltip: { trigger: 'axis' },
+      legend: { data: ['策略收益', '基准(等权)', '超额'], bottom: 0, textStyle: { color: '#aaa' } },
+      grid: { top: 20, bottom: 50, left: 60, right: 20 },
+      xAxis: { 
+        type: 'category', data: windows, 
+        axisLabel: { color: '#aaa', fontSize: 9, rotate: 45 }
+      },
+      yAxis: { 
+        type: 'value', 
+        axisLabel: { color: '#aaa', formatter: '{value}%' },
+        splitLine: { lineStyle: { color: '#2a2a4a' } }
+      },
+      series: [
+        { name: '策略收益', type: 'bar', data: strategy, itemStyle: { 
+          color: function(p) { return p.value >= 0 ? '#27ae60' : '#e74c3c'; }
+        }},
+        { name: '基准(等权)', type: 'bar', data: benchmark, itemStyle: { color: '#7f8c8d' } },
+        { name: '超额', type: 'line', data: excess, 
+          lineStyle: { color: '#f39c12', width: 2 },
+          itemStyle: { color: '#f39c12' },
+          symbol: 'circle', symbolSize: 6
+        }
+      ]
+    });
+  })();
+})();
+</script>
+
+</body>
+</html>

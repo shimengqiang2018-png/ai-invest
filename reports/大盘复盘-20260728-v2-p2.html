@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="color-scheme" content="only light">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>A股复盘 ②</title>
+<style>
+  html { color-scheme: only light !important; }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body {
+    background: #f2f3f5 !important; color: #1a1a2e !important;
+    font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", sans-serif;
+    font-size: 14px; line-height: 1.5; padding: 36px;
+    max-width: 540px; margin: 0 auto;
+    -webkit-font-smoothing: antialiased;
+    display:flex; flex-direction:column; min-height:960px; justify-content:space-between;
+  }
+  .up { color:#e53e3e; } .down { color:#059669; }
+  .card {
+    background:#ffffff !important; border:1px solid #e5e7eb; border-radius:12px;
+    padding:16px 18px; margin-top:12px;
+  }
+  .card:first-child { margin-top:0; }
+  .card-title {
+    font-size:11px; font-weight:700; color:#9ca3af;
+    text-transform:uppercase; letter-spacing:1px; margin-bottom:12px;
+    display:flex; align-items:center; gap:6px;
+  }
+  .dot { width:6px; height:6px; border-radius:2px; display:inline-block; flex-shrink:0; }
+  .footer-text { text-align:center; font-size:9px; color:#d1d5db; }
+  .hero {
+    background:#fffbf0 !important; border:2px solid #fbbf24; border-radius:12px;
+    padding:18px 20px;
+  }
+  .hero-header { display:flex; align-items:center; gap:10px; margin-bottom:4px; }
+  .hero-name { font-size:22px; font-weight:800; color:#111827; }
+  .hero-tag { display:inline-block; background:#fbbf24; color:#78350f; font-size:10px; font-weight:700; padding:3px 8px; border-radius:4px; }
+  .hero-code { font-size:11px; color:#6b7280; font-weight:400; }
+  .hero-change { font-size:46px; font-weight:900; color:#e53e3e; line-height:1.1; margin:6px 0 4px; }
+  .hero-price-line { font-size:12px; color:#6b7280; margin-bottom:10px; }
+  .hero-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:10px; }
+  .hero-stat {
+    background:#ffffff !important; border:1px solid #fde68a; border-radius:8px;
+    padding:12px 6px; text-align:center;
+  }
+  .hero-stat .v { font-size:18px; font-weight:800; color:#b45309; }
+  .hero-stat .l { font-size:10px; color:#6b7280; margin-top:2px; line-height:1.3; }
+  .hero-records {
+    margin-top:10px; font-size:11px; color:#92400e; line-height:1.8;
+    background:#fffbeb !important; border-radius:8px; padding:10px 12px;
+  }
+  .sector-row {
+    display:flex; justify-content:space-between; align-items:center;
+    padding:7px 0; border-bottom:1px solid #f3f4f6;
+  }
+  .sector-row:last-child { border-bottom:none; }
+  .sector-name { font-size:13px; font-weight:500; color:#1f2937; }
+  .sector-pct { font-weight:700; font-size:13px; min-width:56px; text-align:right; }
+  .stock-grid { display:grid; grid-template-columns:1fr 1fr; gap:6px; }
+  .stock-item {
+    background:#fef2f2; border-radius:8px; padding:8px 10px; text-align:center;
+  }
+  .stock-item .sn { font-size:13px; font-weight:600; color:#1f2937; }
+  .stock-item .sc { font-size:16px; font-weight:800; }
+  @media (prefers-color-scheme: dark) {
+    html, body { background-color: #f2f3f5 !important; }
+    .card, .hero-stat { background-color: #ffffff !important; }
+    body, .card, .hero-name, .sector-name { color: #1a1a2e !important; }
+    .hero { background-color: #fffbf0 !important; }
+    .hero-records { background-color: #fffbeb !important; }
+  }
+</style>
+</head>
+<body>
+
+<div class="hero">
+  <div class="card-title"><span class="dot" style="background:#d97706"></span>今日主角</div>
+  <div class="hero-header">
+    <span class="hero-name">光刻机概念</span>
+    <span class="hero-tag">国产替代</span>
+  </div>
+  <div class="hero-code">国产DUV量产启动 · EUV光源工程样机问世</div>
+  <div class="hero-change">涨停潮</div>
+  <div class="hero-price-line">
+    消息驱动：<span style="color:#111827;font-weight:600">国产浸润式DUV光刻机启动量产</span> → 苏州极紫外<span style="color:#e53e3e;font-weight:700">EUV光源工程样机</span>发布
+    &nbsp;|&nbsp; 马斯克：<span style="color:#e53e3e;font-weight:700">"远超市场预期"</span>
+  </div>
+  <div class="hero-grid">
+    <div class="hero-stat"><div class="v">捷拓<span style="font-size:11px">30cm</span></div><div class="l">涨停 · 北交所</div></div>
+    <div class="hero-stat"><div class="v">蓝英/波长<span style="font-size:11px">20cm</span></div><div class="l">涨停 · 创业板</div></div>
+    <div class="hero-stat"><div class="v">张江/永新</div><div class="l">一字板 · 主板核心</div></div>
+  </div>
+  <div class="hero-records">
+    ✅ 国产浸润式DUV光刻机启动量产，年内交付国内芯片厂<br>
+    ✅ 苏州极紫外半导体自研EUV光源工程样机<br>
+    ✅ ASML美股下跌 → A股自主可控逻辑强化<br>
+    ✅ 海立股份、东方嘉盛、奥普光电同步涨停
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-title"><span class="dot" style="background:#2563eb"></span>板块红黑榜</div>
+  <div style="font-size:11px;font-weight:700;color:#e53e3e;margin-bottom:4px">🟢 领涨板块</div>
+  <div class="sector-row"><span class="sector-name">光刻机（概念）</span><span class="sector-pct up">涨停潮</span></div>
+  <div class="sector-row"><span class="sector-name">脑机接口（概念）</span><span class="sector-pct up">+5.2%</span></div>
+  <div class="sector-row"><span class="sector-name">社会服务</span><span class="sector-pct up">+1.22%</span></div>
+  <div class="sector-row"><span class="sector-name">商贸零售</span><span class="sector-pct up">+1.20%</span></div>
+  <div class="sector-row"><span class="sector-name">房地产</span><span class="sector-pct up">+1.00%</span></div>
+  <div class="sector-row"><span class="sector-name">银行</span><span class="sector-pct up">+0.61%</span></div>
+  <hr style="margin:7px 0;border:none;border-top:1px solid #e5e7eb">
+  <div style="font-size:11px;font-weight:700;color:#059669;margin-bottom:4px">🔴 领跌 / 重灾区</div>
+  <div class="sector-row" style="background:#fef2f2;margin:0 -4px;padding:7px 4px;border-radius:6px"><span class="sector-name">通信（CPO/光模块）</span><span class="sector-pct down">-6.16%</span></div>
+  <div class="sector-row" style="background:#fef2f2;margin:0 -4px;padding:7px 4px;border-radius:6px"><span class="sector-name">电子（存储/半导体）</span><span class="sector-pct down">-3.38%</span></div>
+  <div class="sector-row" style="background:#fef2f2;margin:0 -4px;padding:7px 4px;border-radius:6px"><span class="sector-name">建筑材料</span><span class="sector-pct down">-2.60%</span></div>
+  <div class="sector-row" style="background:#fef2f2;margin:0 -4px;padding:7px 4px;border-radius:6px"><span class="sector-name">有色金属</span><span class="sector-pct down">-2.41%</span></div>
+  <div style="font-size:11px;color:#6b7280;margin-top:10px;text-align:center;padding-top:6px;border-top:1px solid #e5e7eb">
+    风格切换：<span style="color:#e53e3e;font-weight:700">AI硬件 → 国产替代 + 红利蓝筹</span> · 资金从高位算力大规模撤出
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-title"><span class="dot" style="background:#e53e3e"></span>杀跌重灾区 · AI算力个股</div>
+  <div class="stock-grid">
+    <div class="stock-item"><div class="sn">新易盛</div><div class="sc down">-12.22%</div></div>
+    <div class="stock-item"><div class="sn">中际旭创</div><div class="sc down">-11.45%</div></div>
+    <div class="stock-item"><div class="sn">兆易创新</div><div class="sc down">跌停</div></div>
+    <div class="stock-item"><div class="sn">寒武纪</div><div class="sc down">-5.03%</div></div>
+    <div class="stock-item"><div class="sn">澜起科技</div><div class="sc down">-7.15%</div></div>
+    <div class="stock-item"><div class="sn">东山精密</div><div class="sc down">跌停</div></div>
+  </div>
+</div>
+
+<div class="footer-text">
+  数据来源：21世纪经济报道 · 证券时报 · 东方财富 · stcn &nbsp;|&nbsp; * 个股涨跌幅为单源数据 &nbsp;|&nbsp; 仅供参考，不构成投资建议 &nbsp;|&nbsp; 2/3
+</div>
+</body>
+</html>

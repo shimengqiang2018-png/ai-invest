@@ -1,0 +1,34 @@
+{
+  "expectations": [
+    {
+      "text": "Has 3+ HTML files",
+      "passed": false,
+      "evidence": "0 HTML files found: []"
+    },
+    {
+      "text": "Has 3+ PNG files",
+      "passed": false,
+      "evidence": "0 PNG files found: []"
+    },
+    {
+      "text": "All PNGs are 1080×1920",
+      "passed": false,
+      "evidence": "No PNGs"
+    },
+    {
+      "text": "HTML uses light theme",
+      "passed": false,
+      "evidence": "Light theme not detected"
+    },
+    {
+      "text": "Contains index market data",
+      "passed": false,
+      "evidence": "No index data"
+    },
+    {
+      "text": "Has data source / disclaimer",
+      "passed": false,
+      "evidence": "Not found"
+    }
+  ]
+}

@@ -1,0 +1,11 @@
+---
+description: "AI Invest slash entry for 深度公司系列：8 篇长文拆一家公司."
+argument-hint: $ARGUMENTS
+---
+
+Use the installed AI Invest Codex skill `deep-company-series` for this request.
+
+If the skill is not already loaded, read and follow `~/ai-invest/codex-skills/deep-company-series/SKILL.md`.
+
+User arguments:
+$ARGUMENTS

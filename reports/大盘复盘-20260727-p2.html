@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="color-scheme" content="only light">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>A股复盘 ②</title>
+<style>
+  html { color-scheme: only light !important; }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body {
+    background: #f2f3f5 !important; color: #1a1a2e !important;
+    font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", sans-serif;
+    font-size: 14px; line-height: 1.5; padding: 36px 36px 36px;
+    max-width: 540px; margin: 0 auto;
+    -webkit-font-smoothing: antialiased;
+    display:flex; flex-direction:column; min-height:960px; justify-content:space-between;
+  }
+  .up { color:#e53e3e; } .down { color:#059669; }
+  .card {
+    background:#ffffff !important; border:1px solid #e5e7eb; border-radius:12px;
+    padding:16px 18px; margin-top:12px;
+  }
+  .card:first-child { margin-top:0; }
+  .card-title {
+    font-size:11px; font-weight:700; color:#9ca3af;
+    text-transform:uppercase; letter-spacing:1px; margin-bottom:12px;
+    display:flex; align-items:center; gap:6px;
+  }
+  .dot { width:6px; height:6px; border-radius:2px; display:inline-block; flex-shrink:0; }
+  .hero {
+    background:#fffbf0 !important; border:2px solid #fbbf24; border-radius:12px;
+    padding:18px 20px;
+  }
+  .hero-header { display:flex; align-items:center; gap:10px; margin-bottom:4px; }
+  .hero-name { font-size:22px; font-weight:800; color:#111827; }
+  .hero-tag { display:inline-block; background:#fbbf24; color:#78350f; font-size:10px; font-weight:700; padding:3px 8px; border-radius:4px; }
+  .hero-code { font-size:11px; color:#6b7280; font-weight:400; }
+  .hero-change { font-size:46px; font-weight:900; color:#e53e3e; line-height:1.1; margin:6px 0 4px; }
+  .hero-price-line { font-size:12px; color:#6b7280; margin-bottom:10px; }
+  .hero-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:10px; }
+  .hero-stat {
+    background:#ffffff !important; border:1px solid #fde68a; border-radius:8px;
+    padding:12px 6px; text-align:center;
+  }
+  .hero-stat .v { font-size:20px; font-weight:800; color:#b45309; }
+  .hero-stat .l { font-size:10px; color:#6b7280; margin-top:2px; line-height:1.3; }
+  .hero-records {
+    margin-top:10px; font-size:11px; color:#92400e; line-height:1.8;
+    background:#fffbeb !important; border-radius:8px; padding:10px 12px;
+  }
+  .sector-row {
+    display:flex; justify-content:space-between; align-items:center;
+    padding:7px 0; border-bottom:1px solid #f3f4f6;
+  }
+  .sector-row:last-child { border-bottom:none; }
+  .sector-name { font-size:13px; font-weight:500; color:#1f2937; }
+  .sector-pct { font-weight:700; font-size:13px; min-width:56px; text-align:right; }
+  .tagline { font-size:11px; color:#6b7280; margin-top:8px; padding:8px 12px; background:#f9fafb; border-radius:8px; text-align:center; }
+  .footer-text { text-align:center; font-size:9px; color:#d1d5db; }
+  hr { border:none; border-top:1px solid #e5e7eb; margin:7px 0; }
+</style>
+</head>
+<body>
+
+<div class="hero">
+  <div class="card-title"><span class="dot" style="background:#d97706"></span>今日主角</div>
+  <div class="hero-header">
+    <span class="hero-name">长鑫科技</span>
+    <span class="hero-tag">DRAM 芯片</span>
+  </div>
+  <div class="hero-code">688825 · 科创板</div>
+  <div class="hero-change">+465.82%</div>
+  <div class="hero-price-line">
+    发行价 <span style="color:#111827;font-weight:600">8.66</span> → 开盘 <span style="color:#e53e3e;font-weight:700">49.50</span> → 收盘 <span style="color:#e53e3e;font-weight:700">49.00元</span>
+    &nbsp;|&nbsp; 最高 <span style="color:#e53e3e;font-weight:700">55.03</span>（+535%）&nbsp;|&nbsp; 中一签最高盈利 23,185元
+  </div>
+  <div class="hero-grid">
+    <div class="hero-stat"><div class="v">1,412<span style="font-size:11px">亿</span></div><div class="l">成交额 · A股历史纪录</div></div>
+    <div class="hero-stat"><div class="v">3.28<span style="font-size:11px">万亿</span></div><div class="l">总市值 · 登顶A股第一</div></div>
+    <div class="hero-stat"><div class="v">66.4<span style="font-size:11px">%</span></div><div class="l">换手率 · 2/3 筹码易手</div></div>
+  </div>
+  <div class="hero-records">
+    ✅ A股首只单日成交破千亿 &nbsp; ✅ 市值超越工商银行，登顶A股<br>
+    ✅ 科创板史上最大IPO · 募资 579 亿<br>
+    ✅ 中国唯一 DRAM 全流程 IDM 企业 · 全球第四
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-title"><span class="dot" style="background:#2563eb"></span>板块红黑榜</div>
+  <div style="font-size:11px;font-weight:700;color:#e53e3e;margin-bottom:4px">🟢 领涨板块</div>
+  <div class="sector-row"><span class="sector-name">建筑材料</span><span class="sector-pct up">+5.44%</span></div>
+  <div class="sector-row"><span class="sector-name">电子化学品</span><span class="sector-pct up">+5.41%</span></div>
+  <div class="sector-row"><span class="sector-name">元件 / PCB</span><span class="sector-pct up">+5.24%</span></div>
+  <div class="sector-row"><span class="sector-name">美容护理</span><span class="sector-pct up">+4.91%</span></div>
+  <div class="sector-row"><span class="sector-name">电池</span><span class="sector-pct up">+4.89%</span></div>
+  <div class="sector-row"><span class="sector-name">医疗服务 / CRO</span><span class="sector-pct up">+4.41%</span></div>
+  <hr>
+  <div style="font-size:11px;font-weight:700;color:#059669;margin-bottom:4px">🔴 领跌 / 滞涨</div>
+  <div class="sector-row" style="background:#fef2f2;margin:0 -8px;padding:7px 8px;border-radius:4px">
+    <span class="sector-name">油气开采及服务</span><span class="sector-pct down">−3.12%</span>
+  </div>
+  <div class="sector-row"><span class="sector-name">保险</span><span class="sector-pct down">−0.69%</span></div>
+  <div class="sector-row"><span class="sector-name">银行</span><span class="sector-pct" style="color:#9ca3af;font-weight:700">+0.01%</span></div>
+  <div class="sector-row"><span class="sector-name">煤炭开采</span><span class="sector-pct up">+1.18%</span></div>
+</div>
+
+<div class="footer-text">
+  数据来源：腾讯行情 · 东方财富 · 证券时报 · 蛋卷基金 &nbsp;|&nbsp; 仅供参考，不构成投资建议 &nbsp;|&nbsp; 2/3
+</div>
+
+</body>
+</html>
