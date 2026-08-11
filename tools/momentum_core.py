@@ -6,10 +6,13 @@ import math
 from dataclasses import dataclass
 from statistics import median
 
+# 止损参数（实盘扫描器与回测审计共用）
+STOP_LOSS_PCT = 0.08  # 绝对止损 8%，入场价下跌超过此比例触发止损
+
 
 @dataclass(frozen=True)
 class MomentumConfig:
-    rsrs_period: int = 20
+    rsrs_period: int = 25
     ma_period: int = 20
     warmup_days: int = 252
     vol_period: int = 20
@@ -51,10 +54,12 @@ def _annualized_volatility(closes: list[float], period: int) -> float:
         return 0.0
     average = _mean(returns)
     variance = sum((value - average) ** 2 for value in returns) / (len(returns) - 1)
-    return math.sqrt(variance) * math.sqrt(252)
+    return math.sqrt(max(0.0, variance)) * math.sqrt(252)
 
 
 def _historical_volatility_median(closes: list[float], period: int) -> float:
+    if len(closes) <= period:
+        return 0.0
     vols = [
         _annualized_volatility(closes[: end + 1], period)
         for end in range(period, len(closes))
@@ -64,45 +69,54 @@ def _historical_volatility_median(closes: list[float], period: int) -> float:
 
 
 def _raw_rsrs(bars: tuple[dict, ...], index: int, period: int) -> tuple[float, float, float]:
+    """标准 OLS 线性回归 + 指数年化，对齐小薪ETF轮动算法。
+
+    Returns:
+        (raw_score, slope_annual_pct, r_squared)
+        raw_score = 年化收益率(%) × R²（负值时取 0）
+    """
     if period <= 0 or index < period:
         return 0.0, 0.0, 0.0
     window = bars[index - period:index + 1]
     log_prices = [math.log(float(bar["close"])) for bar in window]
     size = len(log_prices)
-    weights = [1 + position / (size - 1) for position in range(size)]
-    x_values = list(range(size))
-    weight_sum = sum(weights)
-    weighted_x = sum(weight * x for weight, x in zip(weights, x_values))
-    weighted_y = sum(weight * y for weight, y in zip(weights, log_prices))
-    weighted_xx = sum(weight * x * x for weight, x in zip(weights, x_values))
-    weighted_xy = sum(
-        weight * x * y for weight, x, y in zip(weights, x_values, log_prices)
-    )
-    denominator = weight_sum * weighted_xx - weighted_x * weighted_x
-    if abs(denominator) < 1e-12:
+
+    # 标准 OLS: y = slope × x + intercept，等权
+    x_mean = (size - 1) / 2.0
+    y_mean = _mean(log_prices)
+    sxy = sum((i - x_mean) * (y - y_mean) for i, y in enumerate(log_prices))
+    sxx = sum((i - x_mean) ** 2 for i in range(size))
+    if abs(sxx) < 1e-12:
         return 0.0, 0.0, 0.0
-    slope = (weight_sum * weighted_xy - weighted_x * weighted_y) / denominator
-    intercept = (weighted_y - slope * weighted_x) / weight_sum
-    y_mean = weighted_y / weight_sum
-    total_error = sum(
-        weight * (y - y_mean) ** 2 for weight, y in zip(weights, log_prices)
-    )
+    slope = sxy / sxx
+    intercept = y_mean - slope * x_mean
+
+    # R²: 标准 OLS 下的拟合优度
+    total_error = sum((y - y_mean) ** 2 for y in log_prices)
     residual_error = sum(
-        weight * (y - (slope * x + intercept)) ** 2
-        for weight, x, y in zip(weights, x_values, log_prices)
+        (y - (slope * i + intercept)) ** 2
+        for i, y in enumerate(log_prices)
     )
     r_squared = max(0.0, 1 - residual_error / total_error) if total_error > 1e-12 else 0.0
-    slope_annual_pct = slope * 252 * 100
-    raw_score = max(0.0, slope_annual_pct * r_squared)
+
+    # 指数年化: e^(slope×250) − 1，用 250 天（≈一年交易日）
+    annual_ret = math.exp(slope * 250) - 1
+    slope_annual_pct = annual_ret * 100
+    # 动量分 = 年化收益率(小数) × R²，对齐小薪ETF轮动
+    raw_score = annual_ret * r_squared
     return raw_score, slope_annual_pct, r_squared
 
 
-def _volume_ratio(bars: tuple[dict, ...], index: int) -> float:
-    if index < 5:
-        return 1.0
-    previous = [float(bar["volume"]) for bar in bars[index - 5:index]]
-    average = _mean(previous)
-    return float(bars[index]["volume"]) / average if average > 0 else 1.0
+def _volume_ratio(bars: tuple[dict, ...], index: int) -> float | None:
+    historical = [float(bar["volume"]) for bar in bars[index - 5:index]]
+    current = float(bars[index]["volume"])
+    volumes = [*historical, current]
+    if (
+        len(historical) < 5
+        or any(not math.isfinite(volume) or volume <= 0 for volume in volumes)
+    ):
+        return None
+    return current / _mean(historical)
 
 
 def _rsi(closes: list[float], period: int) -> float:
@@ -149,12 +163,16 @@ def evaluate_momentum_signal(
     volume_ratio = _volume_ratio(bars, index)
     rsi = _rsi(closes, config.rsi_period)
 
-    rsrs_ok = raw_score > 0
+    rsrs_ok = raw_score > -5.0  # 允许负分排行，仅过滤极端异常值
     ma_ok = ma_value is not None and current_close > ma_value
     volatility_ok = historical_median > 0 and (
         current_volatility <= historical_median * config.vol_limit_multiple
     )
-    volume_ok = volume_ratio <= config.volume_limit_multiple
+    # 放量仅在下行日过滤（防 distribution），放量上行日通过（突破确认）
+    _day_down = index > 0 and bars[index]["close"] < bars[index - 1]["close"]
+    volume_ok = volume_ratio is not None and (
+        volume_ratio <= config.volume_limit_multiple or not _day_down
+    )
     rsi_ok = rsi <= config.rsi_limit
     passed = formal and rsrs_ok and ma_ok and volatility_ok and volume_ok and rsi_ok
     golden_cross = bool(passed and ma60 is not None and current_close > ma_value > ma60)
@@ -165,7 +183,7 @@ def evaluate_momentum_signal(
         "strict_history_days": strict_history_days,
         "close": current_close,
         "ma": ma_value,
-        "ma20": ma_value,
+        "ma_period": config.ma_period,
         "ma60": ma60,
         "above_ma": ma_ok,
         "golden_cross": golden_cross,
@@ -176,10 +194,11 @@ def evaluate_momentum_signal(
         "volatility_history_index_range": (history_start, history_end),
         "volume_ratio": volume_ratio,
         "volume_ok": volume_ok,
+        "day_down": _day_down,
         "rsi": rsi,
         "rsi_ok": rsi_ok,
         "rsrs_ok": rsrs_ok,
-        "display_rsrs_score": min(50.0, raw_score),
+        "display_rsrs_score": raw_score,
     }
     return SignalSnapshot(
         code=code,
@@ -202,3 +221,84 @@ def rank_momentum_signals(signals: list[SignalSnapshot]) -> SignalSnapshot | Non
         passing,
         key=lambda signal: (-signal.raw_rsrs_score, -signal.r_squared, signal.code),
     )
+
+
+def select_rotation_target(
+    holding_code: str | None,
+    snapshots: list[SignalSnapshot],
+    switch_buffer: float = 1.0,
+) -> dict:
+    """带迟滞的轮动决策，返回 {"action", "target", "reason"}。
+
+    action ∈ {buy, switch, hold, liquidate, none}
+    target: SignalSnapshot | None
+
+    规则（buffer≥1.0，buffer=1.0 位级退化为无迟滞现行为）：
+    1. 无持仓：有通过者 → buy/switch（同一语义），否则 none
+    2. 持仓在池内且已通过：全局第一 == 持仓 → hold；
+       否则第一为 challenger，
+       challenger.raw_score < 持仓.raw_score × buffer → hold，反之 switch
+    3. 持仓在池内但未通过：有第一 → switch，否则 liquidate
+    4. 持仓不在池内（如防御资产511880）：同无持仓处理
+    """
+    ranked = rank_momentum_signals(snapshots)  # 全局第一（仅通过者）
+    snap_by_code = {s.code: s for s in snapshots}
+
+    if holding_code is None or holding_code not in snap_by_code:
+        # 无持仓或持仓不在快照内（如防御资产）
+        if ranked is not None:
+            return {
+                "action": "buy" if holding_code is None else "switch",
+                "target": ranked,
+                "reason": f"排名第一 {ranked.code} RSRS={ranked.raw_rsrs_score:.2f}",
+            }
+        return {"action": "none", "target": None, "reason": "候选池无通过过滤的标的"}
+
+    holding = snap_by_code[holding_code]
+
+    if not holding.passed:
+        # 持仓失效
+        if ranked is not None:
+            return {
+                "action": "switch",
+                "target": ranked,
+                "reason": f"持仓 {holding_code} 信号失效，切换至 {ranked.code} RSRS={ranked.raw_rsrs_score:.2f}",
+            }
+        return {
+            "action": "liquidate",
+            "target": None,
+            "reason": f"持仓 {holding_code} 信号失效，候选池无替代标的",
+        }
+
+    # 持仓仍通过 → 迟滞
+    if ranked is None:
+        # 理论上不应发生（holding 已通过则 ranked 至少含 holding），保守处理
+        return {"action": "hold", "target": holding, "reason": "无排名可用，继续持有"}
+
+    if ranked.code == holding_code:
+        return {
+            "action": "hold",
+            "target": holding,
+            "reason": f"持仓 {holding_code} 仍为全局第一 RSRS={holding.raw_rsrs_score:.2f}",
+        }
+
+    # challenger != holding
+    challenger = ranked
+    threshold = holding.raw_rsrs_score * switch_buffer
+    if challenger.raw_rsrs_score < threshold:
+        return {
+            "action": "hold",
+            "target": holding,
+            "reason": (
+                f"challenger {challenger.code} RSRS={challenger.raw_rsrs_score:.2f} "
+                f"未超阈值 {threshold:.2f}（持仓 {holding_code} RSRS={holding.raw_rsrs_score:.2f} × {switch_buffer}）"
+            ),
+        }
+    return {
+        "action": "switch",
+        "target": challenger,
+        "reason": (
+            f"challenger {challenger.code} RSRS={challenger.raw_rsrs_score:.2f} "
+            f"超过阈值 {threshold:.2f}（持仓 {holding_code} RSRS={holding.raw_rsrs_score:.2f} × {switch_buffer}）"
+        ),
+    }

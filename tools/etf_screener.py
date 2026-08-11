@@ -297,6 +297,13 @@ def score_volatility(vol: float) -> tuple:
 # ==============================================================================
 
 def main():
+    import argparse
+    parser = argparse.ArgumentParser(
+        description="全市场 ETF 筛选 — 动量轮动策略选品"
+    )
+    parser.add_argument("--json", action="store_true", help="输出结构化 JSON（供仪表盘使用）")
+    args = parser.parse_args()
+
     print("=" * 70)
     print("  全市场 ETF 筛选 — 动量轮动策略选品")
     print("=" * 70)
@@ -464,6 +471,18 @@ def main():
         for c2 in sel_codes[i+1:]:
             sel_corrs.append(corr_matrix[c1][c2])
     avg_sel_corr = sum(sel_corrs) / len(sel_corrs) if sel_corrs else 0
+    if args.json:
+        print("\n__JSON_START__")
+        print(json.dumps({
+            "generated_at": datetime.now().isoformat(timespec="seconds"),
+            "candidates_count": len(results),
+            "results": results,
+            "correlation_matrix": corr_matrix,
+            "recommended": selected,
+            "avg_selected_corr": round(avg_sel_corr, 2),
+        }, indent=2, ensure_ascii=False, default=str))
+        print("__JSON_END__")
+        return
     print(f"\n  组合内平均相关性: {avg_sel_corr:.2f}")
     if avg_sel_corr < 0.4:
         print(f"  ✅ 相关性低，轮动空间充足")

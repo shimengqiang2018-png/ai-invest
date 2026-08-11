@@ -316,15 +316,15 @@ class BacktestDataManifestTests(unittest.TestCase):
     def test_result_preserves_market_data_manifest(self):
         bars = tuple(_make_flat_bars("A", "2023-01-02", 257))
         manifest = MarketDataManifest(
-            schema_version=2, code="A00000", source="tencent", adjustment="qfq",
+            schema_version=3, code="A00000", source="tencent", adjustment="qfq",
             volume_adjustment="none", fetched_at="2026-07-28T00:00:00Z",
             start_date=bars[0]["date"], end_date=bars[-1]["date"],
             bar_count=len(bars), content_hash="a" * 64,
             adjustment_verified=False,
             verification_source="provider_declared_qfqday",
-            verification_version=1, overlap_start=bars[0]["date"],
+            verification_version=2, overlap_start=bars[0]["date"],
             overlap_end=bars[-1]["date"], overlap_count=len(bars),
-            verification_tolerance=0.03, max_return_error=0.0,
+            verification_tolerance=0.005, max_return_error=0.0,
             overlap_content_hash="b" * 64,
         )
         series = MarketDataSeries(bars, manifest)
@@ -341,15 +341,15 @@ class BacktestDataManifestTests(unittest.TestCase):
         bars = tuple(_make_flat_bars("A", "2023-01-02", 260))
         end_date = bars[256]["date"]
         manifest = MarketDataManifest(
-            schema_version=2, code="A00000", source="tencent", adjustment="qfq",
+            schema_version=3, code="A00000", source="tencent", adjustment="qfq",
             volume_adjustment="none", fetched_at="2026-07-28T00:00:00Z",
             start_date=bars[0]["date"], end_date=bars[-1]["date"],
             bar_count=len(bars), content_hash="a" * 64,
             adjustment_verified=False,
             verification_source="provider_declared_qfqday",
-            verification_version=1, overlap_start=bars[0]["date"],
+            verification_version=2, overlap_start=bars[0]["date"],
             overlap_end=bars[-1]["date"], overlap_count=len(bars),
-            verification_tolerance=0.03, max_return_error=0.0,
+            verification_tolerance=0.005, max_return_error=0.0,
             overlap_content_hash="b" * 64,
         )
         source = MarketDataSeries(bars, manifest)

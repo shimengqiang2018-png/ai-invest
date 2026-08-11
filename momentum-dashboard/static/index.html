@@ -1,0 +1,467 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>动量轮动策略台 · RSRS v3.0</title>
+  <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
+  <link rel="stylesheet" href="/static/style.css?v=7">
+  <script>
+    /* ES2020 兼容性检查：旧浏览器会直接给出提示，而不是静默卡在“加载中” */
+    (function () {
+      try {
+        new Function("a?.b");
+        new Function("a ?? b");
+      } catch (e) {
+        document.getElementById("dataAsOf").textContent =
+          "浏览器过旧：页面需要支持可选链(?.)/空值合并(??)的现代浏览器，请改用 Chrome 或升级 Safari";
+      }
+    })();
+  </script>
+</head>
+<body>
+  <div class="app">
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="brand-mark">M</div>
+        <div class="brand-text">
+          <div class="brand-title">动量轮动策略台</div>
+          <div class="brand-sub">RSRS v3.0 · ETF Rotation</div>
+        </div>
+      </div>
+      <nav class="nav" id="nav">
+        <button class="nav-item active" data-tab="overview">
+          <span class="nav-icon">◎</span>总览
+        </button>
+        <button class="nav-item" data-tab="signals">
+          <span class="nav-icon">↻</span>信号扫描
+        </button>
+        <button class="nav-item" data-tab="grid">
+          <span class="nav-icon">▦</span>网格
+        </button>
+        <button class="nav-item" data-tab="backtest">
+          <span class="nav-icon">▤</span>回测分析
+        </button>
+        <button class="nav-item" data-tab="screener">
+          <span class="nav-icon">⌕</span>选品池
+        </button>
+        <button class="nav-item" data-tab="positions">
+          <span class="nav-icon">▦</span>持仓
+        </button>
+        <button class="nav-item" data-tab="db">
+          <span class="nav-icon">▤</span>数据存储
+        </button>
+        <button class="nav-item" data-tab="audit">
+          <span class="nav-icon">⚠</span>风险审计
+        </button>
+      </nav>
+      <div class="sidebar-foot">
+        <button id="globalRefresh" class="btn ghost" title="强制刷新当前页数据">刷新数据</button>
+        <div class="status-line">
+          <span class="dot" id="serverDot"></span>
+          <span id="serverStatus">连接中…</span>
+        </div>
+      </div>
+    </aside>
+
+    <main class="main">
+      <header class="topbar">
+        <div>
+          <h1 id="pageTitle">总览</h1>
+          <div class="subtitle" id="dataAsOf">加载中…</div>
+        </div>
+        <div class="topbar-right">
+          <span class="badge" id="cacheBadge" hidden></span>
+          <span class="muted" id="lastUpdate">--</span>
+        </div>
+      </header>
+
+      <!-- 总览 -->
+      <section class="tab active" id="tab-overview">
+        <div class="cards" id="ov-cards"></div>
+        <div class="grid-2">
+          <div class="panel">
+            <div class="panel-title">操作建议</div>
+            <div id="ov-advice" class="advice-list"></div>
+          </div>
+          <div class="panel">
+            <div class="panel-title">动量信号 Top 4</div>
+            <div id="ov-signals" class="table-wrap"></div>
+          </div>
+        </div>
+        <div class="panel">
+          <div class="panel-title">组合速览</div>
+          <div id="ov-positions" class="chips"></div>
+        </div>
+      </section>
+
+      <!-- 信号扫描 -->
+      <section class="tab" id="tab-signals">
+        <div class="toolbar">
+          <label>信号池
+            <select id="sig-pool">
+              <option value="recommended">推荐 4-ETF（黄金+纳指+创业板+恒生）</option>
+              <option value="full">全池 11 只</option>
+            </select>
+          </label>
+          <label>动量周期
+            <select id="sig-momentum">
+              <option value="20">20 日</option>
+              <option value="25" selected>25 日</option>
+              <option value="40">40 日</option>
+              <option value="60">60 日</option>
+            </select>
+          </label>
+          <label>自定义
+            <input id="sig-custom" placeholder="如 518880,513100" size="18">
+          </label>
+          <button class="btn" id="sig-run">扫描信号</button>
+          <span class="muted" id="sig-note"></span>
+          <span id="sig-live" class="live-badge"></span>
+        </div>
+        <div id="sig-advice" class="advice-banner"></div>
+        <div class="panel">
+          <div class="panel-title">信号明细 <span class="panel-sub" id="sig-subtitle"></span></div>
+          <div id="sig-table" class="table-wrap"></div>
+        </div>
+        <div class="panel">
+          <div class="panel-title">价格走势 <span class="panel-sub" id="sig-chart-title">点击表格行查看 K 线</span></div>
+          <div class="chart-box"><canvas id="sig-chart" height="320"></canvas></div>
+          <div class="chart-legend" id="sig-legend"></div>
+        </div>
+      </section>
+
+      <!-- 网格 -->
+      <section class="tab" id="tab-grid">
+        <div class="toolbar">
+          <button class="btn" id="grid-run">刷新网格</button>
+          <span class="muted" id="grid-note"></span>
+        </div>
+        <div class="advice-banner" id="grid-groups"></div>
+        <div class="panel">
+          <div class="panel-title">网格标的分析 <span class="panel-sub" id="grid-subtitle"></span></div>
+          <div id="grid-table" class="table-wrap"></div>
+        </div>
+        <div class="panel">
+          <div class="panel-title">网格持仓详情 <span class="panel-sub">口径：底仓=策略配置，网格仓=总持仓-底仓（按持仓快照+成交记录推算）</span></div>
+          <div class="toolbar"><span class="muted" id="grid-positions-summary"></span></div>
+          <div id="grid-positions" class="table-wrap"></div>
+        </div>
+        <div class="panel">
+          <div class="panel-title">触发记录录入 <span class="panel-sub">手动录入 或 上传成交截图由模型识别后核验入库（同步 data/grid_triggers.json）</span></div>
+          <div class="toolbar">
+            <label>标的 <select id="grid-trigger-code"></select></label>
+            <label>日期 <input id="grid-trigger-date" type="date"></label>
+            <label>时间 <input id="grid-trigger-time" type="time" size="6"></label>
+            <label>动作
+              <select id="grid-trigger-action">
+                <option value="buy">买入</option>
+                <option value="sell">卖出</option>
+              </select>
+            </label>
+            <label>类型
+              <select id="grid-trigger-type">
+                <option value="grid" selected>网格</option>
+                <option value="add">加仓</option>
+                <option value="reduce">减仓</option>
+                <option value="momentum">动量</option>
+              </select>
+            </label>
+            <label>价格 <input id="grid-trigger-price" type="number" step="0.001" size="6"></label>
+            <label>数量 <input id="grid-trigger-shares" type="number" step="100" size="6"></label>
+            <label>基准价前 <input id="grid-trigger-bb" type="number" step="0.001" size="6" placeholder="默认当前基准"></label>
+            <label>基准价后 <input id="grid-trigger-ba" type="number" step="0.001" size="6" placeholder="默认当前基准"></label>
+            <button class="btn" id="grid-trigger-add">手动录入</button>
+          </div>
+          <div class="toolbar">
+            <label>识别模型 <select id="grid-trigger-provider"><option value="">加载中…</option></select></label>
+            <button class="btn" id="grid-upload-btn">选择成交截图</button>
+            <input id="grid-trigger-files" type="file" accept="image/*" multiple hidden>
+            <button class="btn" id="grid-trigger-parse">截图识别</button>
+            <span class="muted" id="grid-trigger-note"></span>
+          </div>
+          <div id="grid-trigger-parse-result" class="table-wrap"></div>
+        </div>
+        <div class="panel">
+          <div class="panel-title">最近触发记录
+            <button class="btn mini" id="grid-triggers-toggle">收起</button>
+          </div>
+          <div class="toolbar" id="grid-triggers-filter">
+            <label>标的 <input id="grid-trigger-filter-code" placeholder="如 512010，留空=全部" size="10"></label>
+            <label>类型
+              <select id="grid-trigger-filter-type">
+                <option value="">全部</option>
+                <option value="grid">网格</option>
+                <option value="add">加仓</option>
+                <option value="reduce">减仓</option>
+                <option value="momentum">动量</option>
+              </select>
+            </label>
+            <label>开始 <input id="grid-trigger-filter-start" type="date"></label>
+            <label>结束 <input id="grid-trigger-filter-end" type="date"></label>
+            <button class="btn" id="grid-trigger-filter-btn">查询</button>
+            <button class="btn" id="grid-trigger-filter-reset">重置</button>
+            <span class="muted" id="grid-triggers-count"></span>
+          </div>
+          <div id="grid-triggers" class="table-wrap"></div>
+        </div>
+        <div class="panel">
+          <div class="panel-title">网格参数自动寻优 <span class="panel-sub">内置候选（间距 1-5%、层数 3-8、每格金额 200-5000 元折算股数）· 多标的并行 · 输出各标的最优配置</span></div>
+          <div class="toolbar">
+            <label>标的代码 <input id="grid-opt-codes" placeholder="留空=全部，逗号分隔" size="18"></label>
+            <label>资金 <input id="grid-opt-capital" type="number" value="100000" size="8" min="1000" step="10000"></label>
+            <label>区间
+              <select id="grid-opt-start">
+                <option value="2y" selected>近 2 年</option>
+                <option value="3y">近 3 年</option>
+                <option value="5y">近 5 年</option>
+                <option value="full">全部（2018 起）</option>
+              </select>
+            </label>
+            <button class="btn" id="grid-opt-run">运行优化</button>
+            <span class="muted" id="grid-opt-note"></span>
+          </div>
+          <div class="panel-title">各标的最优配置</div>
+          <div id="grid-opt-best" class="table-wrap"></div>
+          <div class="panel-title">组合明细（按年化降序）</div>
+          <div id="grid-opt-results" class="table-wrap"></div>
+        </div>
+      </section>
+
+      <!-- 回测分析 -->
+      <section class="tab" id="tab-backtest">
+        <div class="toolbar">
+          <label>回测池
+            <select id="bt-preset"></select>
+          </label>
+          <label>动量周期
+            <select id="bt-momentum">
+              <option value="20">20 日</option>
+              <option value="25" selected>25 日</option>
+              <option value="40">40 日</option>
+              <option value="60">60 日</option>
+            </select>
+          </label>
+          <label>检查频率
+            <select id="bt-freq">
+              <option value="weekly">周频</option>
+              <option value="biweekly" selected>双周</option>
+              <option value="monthly">月频</option>
+            </select>
+          </label>
+          <label>回测区间
+            <select id="bt-start">
+              <option value="full">全部（2013 起）</option>
+              <option value="5y">近 5 年</option>
+              <option value="3y">近 3 年</option>
+              <option value="1y">近 1 年</option>
+            </select>
+          </label>
+          <label>佣金费率
+            <select id="bt-commission">
+              <option value="0.0003">万3</option>
+              <option value="0.00025" selected>万2.5</option>
+              <option value="0.0002">万2</option>
+              <option value="0.0001">万1</option>
+              <option value="0">免佣</option>
+            </select>
+          </label>
+          <label>最低佣金
+            <select id="bt-min-commission">
+              <option value="0" selected>免5（0元）</option>
+              <option value="5">5 元</option>
+            </select>
+          </label>
+          <button class="btn" id="bt-run">运行回测</button>
+          <span class="muted" id="bt-note"></span>
+        </div>
+        <div class="cards" id="bt-cards"></div>
+        <div class="panel">
+          <div class="panel-title">净值曲线</div>
+          <div class="chart-box"><canvas id="bt-chart" height="340"></canvas></div>
+          <div class="chart-legend" id="bt-legend"></div>
+        </div>
+        <div class="grid-2">
+          <div class="panel">
+            <div class="panel-title">枚举组合回测 Top 10 <span class="panel-sub" id="enum-sub">加载中…</span></div>
+            <div id="bt-enum" class="table-wrap"></div>
+          </div>
+          <div class="panel">
+            <div class="panel-title">最近交易</div>
+            <div id="bt-trades" class="table-wrap"></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- 选品池 -->
+      <section class="tab" id="tab-screener">
+        <div class="toolbar">
+          <label>类别
+            <select id="sc-category">
+              <option value="">全部</option>
+            </select>
+          </label>
+          <label>数量
+            <select id="sc-top">
+              <option value="50">Top 50</option>
+              <option value="100" selected>Top 100</option>
+              <option value="200">Top 200</option>
+              <option value="640">全部</option>
+            </select>
+          </label>
+          <button class="btn ghost" id="sc-run-screener">运行四维选品</button>
+          <span class="muted" id="sc-note"></span>
+        </div>
+        <div class="panel">
+          <div class="panel-title">全市场动量适配评分 <span class="panel-sub" id="sc-subtitle"></span></div>
+          <div id="sc-table" class="table-wrap"></div>
+        </div>
+        <div class="grid-2">
+          <div class="panel">
+            <div class="panel-title">四维选品推荐</div>
+            <div id="sc-recommend" class="table-wrap"></div>
+          </div>
+          <div class="panel">
+            <div class="panel-title">组合内相关性</div>
+            <div id="sc-corr" class="corr-wrap"></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- 持仓 -->
+      <section class="tab" id="tab-positions">
+        <div class="toolbar">
+          <label>解析模型
+            <select id="pos-provider"><option value="">加载中…</option></select>
+          </label>
+          <button class="btn" id="pos-upload-btn">上传图片解析持仓</button>
+          <input type="file" id="pos-file" accept="image/*" multiple hidden>
+          <span class="muted" id="pos-parse-status"></span>
+        </div>
+        <div id="pos-parse-result" class="panel" hidden>
+          <div class="panel-title">AI 解析结果 <span class="panel-sub" id="pos-parse-meta"></span></div>
+          <div class="cards" id="pos-parse-summary"></div>
+          <div class="panel-title">核验持仓明细</div>
+          <div id="pos-parse-holdings" class="table-wrap"></div>
+          <div class="panel-title">识别到的交易记录</div>
+          <div id="pos-parse-trades" class="table-wrap"></div>
+          <div class="advice-banner" style="margin-bottom:0">
+            <button class="btn" id="pos-confirm">确认更新到系统</button>
+            <button class="btn ghost" id="pos-reparse">重新解析</button>
+            <button class="btn ghost" id="pos-discard">丢弃</button>
+          </div>
+        </div>
+        <div class="cards" id="pos-summary"></div>
+        <div class="panel">
+          <div class="panel-title">策略归属（网格 + 动量双策略） <span class="panel-sub">按操作方案标的口径自动标注 · 两套策略资金物理隔离</span></div>
+          <div class="cards" id="pos-buckets"></div>
+          <div id="pos-notes" class="advice-banner" style="margin-bottom:0"></div>
+        </div>
+        <div class="panel">
+          <div class="panel-title">持仓明细 <span class="panel-sub" id="pos-subtitle"></span></div>
+          <div id="pos-table" class="table-wrap"></div>
+        </div>
+        <div class="panel">
+          <div class="panel-title">网格标的状态 <span class="panel-sub">现价 vs 买卖触发价 · 网格趋势</span></div>
+          <div id="pos-grid-targets" class="table-wrap"></div>
+        </div>
+        <div class="panel">
+          <div class="panel-title">策略归属</div>
+          <div id="pos-groups" class="chips"></div>
+        </div>
+      </section>
+
+      <!-- 数据存储 -->
+      <section class="tab" id="tab-db">
+        <div class="cards" id="db-summary"></div>
+        <div class="panel">
+          <div class="panel-title">数据表浏览 <span class="panel-sub">dashboard.db · SQLite</span></div>
+          <div class="toolbar">
+            <label>表
+              <select id="db-table">
+                <option value="positions_snapshots">positions_snapshots（持仓快照）</option>
+                <option value="parse_history">parse_history（解析历史）</option>
+                <option value="api_logs">api_logs（业务日志）</option>
+                <option value="cache">cache（结果缓存）</option>
+                <option value="signal_history">signal_history（信号历史）</option>
+                <option value="grid_triggers">grid_triggers（网格触发）</option>
+                <option value="backtest_results">backtest_results（回测/寻优结果）</option>
+                <option value="scheduler_runs">scheduler_runs（调度历史）</option>
+              </select>
+            </label>
+            <label>条数
+              <select id="db-limit">
+                <option value="50">50</option>
+                <option value="100" selected>100</option>
+                <option value="200">200</option>
+              </select>
+            </label>
+            <button class="btn" id="db-load">加载</button>
+            <button class="btn ghost" id="db-prev">上一页</button>
+            <button class="btn ghost" id="db-next">下一页</button>
+            <span class="muted" id="db-offset">第 1 页</span>
+          </div>
+          <div id="db-rows" class="table-wrap"></div>
+        </div>
+        <div class="panel">
+          <div class="panel-title">日志浏览</div>
+          <div class="toolbar">
+            <label>级别
+              <select id="db-log-level">
+                <option value="">全部</option>
+                <option value="INFO">INFO</option>
+                <option value="WARN">WARN</option>
+                <option value="ERROR">ERROR</option>
+              </select>
+            </label>
+            <label>条数
+              <select id="db-log-limit">
+                <option value="50">50</option>
+                <option value="100" selected>100</option>
+                <option value="300">300</option>
+              </select>
+            </label>
+            <button class="btn ghost" id="db-log-load">加载日志</button>
+          </div>
+          <div id="db-logs" class="table-wrap"></div>
+        </div>
+      </section>
+
+      <!-- 风险审计 -->
+      <section class="tab" id="tab-audit">
+        <div class="toolbar">
+          <button class="btn" id="au-run">运行审计</button>
+          <span class="muted" id="au-note"></span>
+        </div>
+        <div class="grid-2">
+          <div class="panel">
+            <div class="panel-title">日频风险指标</div>
+            <div id="au-daily" class="metric-grid"></div>
+          </div>
+          <div class="panel">
+            <div class="panel-title">RSRS 因子 IC / IR</div>
+            <div id="au-ic" class="table-wrap"></div>
+          </div>
+        </div>
+        <div class="grid-2">
+          <div class="panel">
+            <div class="panel-title">历史情景压力测试</div>
+            <div id="au-stress" class="table-wrap"></div>
+          </div>
+          <div class="panel">
+            <div class="panel-title">VaR 解读 <span class="panel-sub">动量子账户 ¥20,000</span></div>
+            <div id="au-var" class="metric-grid"></div>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <div id="toast" class="toast" hidden></div>
+  <div id="loading" class="loading" hidden>
+    <div class="spinner"></div>
+    <div id="loading-text">加载中…</div>
+  </div>
+  <script src="/static/app.js?v=44"></script>
+</body>
+</html>

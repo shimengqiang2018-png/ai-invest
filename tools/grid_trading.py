@@ -35,7 +35,7 @@ except ModuleNotFoundError:  # 支持直接执行 tools/grid_trading.py
 CONFIGS = {
     "513180": {
         "name": "恒生科技ETF",
-        "base_price": "0.603",          # 动态基准价（2026-07-20 卖出触发后更新）
+        "base_price": "0.609",          # 动态基准价（2026-08-10 东方财富核对）
         "cost_price": "0.578",          # 初始持仓成本价，用于动态成本计算
         "grid_spacing_up_pct": "3.5",   # 上涨间距%（卖出方向）
         "grid_spacing_down_pct": "2.5", # 下跌间距%（买入方向）
@@ -79,7 +79,7 @@ CONFIGS = {
     },
     "159915": {
         "name": "创业板ETF",
-        "base_price": "3.682",
+        "base_price": "3.412",          # 动态基准价（2026-07-28 触发买3.412后更新，原3.682）
         "cost_price": "3.301",
         "grid_spacing_pct": "2.50",
         "levels_above": 6,
@@ -87,9 +87,9 @@ CONFIGS = {
         "shares_per_grid": 100,
         "base_position": 200,
         "grid_position": 600,
-        "max_position": 1400,
+        "max_position": 2400,           # 2026-08-11 迁移002656后上限上调（原1,400，两笔各800）
         "stop_loss_price": "2.940",
-        "note": "2026-07-21已触发卖3.507/买3.418/卖3.505/卖3.592/卖3.682，基准3.682，成本3.301(对齐券商)",
+        "note": "2026-07-21~07-28触发后基准更新至3.412；成本3.301(对齐券商)",
     },
     "588000": {
         "name": "科创50ETF",
@@ -125,7 +125,7 @@ CONFIGS = {
     },
     "512880": {
         "name": "证券ETF",
-        "base_price": "1.128",
+        "base_price": "1.090",          # 动态基准价（2026-08-10 东方财富核对）
         "cost_price": "1.128",
         "grid_spacing_up_pct": "3.5",
         "grid_spacing_down_pct": "2.5",
@@ -141,7 +141,7 @@ CONFIGS = {
     },
     "512100": {
         "name": "中证1000ETF",
-        "base_price": "2.914",
+        "base_price": "3.102",          # 动态基准价（2026-08-11 实时价核对，旧值2.914偏差>5%）
         "cost_price": "2.914",
         "grid_spacing_up_pct": "3.5",
         "grid_spacing_down_pct": "2.5",
@@ -157,7 +157,7 @@ CONFIGS = {
     },
     "513310": {
         "name": "中韩半导体ETF",
-        "base_price": "5.199",
+        "base_price": "4.899",          # 动态基准价（2026-08-11 实时价核对，旧值5.199偏差>5%）
         "cost_price": "5.199",
         "grid_spacing_pct": "4.0",
         "levels_above": 6,
@@ -171,7 +171,7 @@ CONFIGS = {
     },
     "513330": {
         "name": "恒生互联网ETF",
-        "base_price": "0.384",
+        "base_price": "0.412",          # 动态基准价（2026-08-11 实时价核对，旧值0.384偏差>5%）
         "cost_price": "0.384",
         "grid_spacing_pct": "3.0",
         "levels_above": 5,
@@ -213,7 +213,7 @@ CONFIGS = {
     },
     "512010": {
         "name": "医药ETF",
-        "base_price": "0.377",
+        "base_price": "0.405",          # 动态基准价（2026-08-10 东方财富核对）
         "cost_price": "0.377",
         "grid_spacing_up_pct": "3.0",
         "grid_spacing_down_pct": "2.0",
@@ -229,7 +229,7 @@ CONFIGS = {
     },
     "512690": {
         "name": "酒ETF",
-        "base_price": "0.425",
+        "base_price": "0.446",          # 动态基准价（2026-08-10 东方财富核对）
         "cost_price": "0.425",
         "grid_spacing_up_pct": "3.0",
         "grid_spacing_down_pct": "2.0",
@@ -734,6 +734,29 @@ def get_price_or_input(etf_code, price_str=None):
         print("\n已取消")
         sys.exit(0)
 
+
+def _base_price_deviation(cfg, current_price):
+    """Return a warning string if CONFIGS base_price deviates >5% from live price."""
+    if not cfg or not current_price:
+        return None
+    bp_raw = cfg.get("base_price")
+    if not bp_raw:
+        return None
+    bp = D(str(bp_raw))
+    if bp <= 0:
+        return None
+    price = D(str(current_price))
+    if price <= 0:
+        return None
+    deviation = (price / bp - 1) * 100
+    if abs(deviation) > 5:
+        return (
+            f"⚠️ 配置基准价 ¥{bp} 与实时价 ¥{price} 偏差 {deviation:+.1f}%"
+            f"（>5%），请核对 base_price 并同步条件单"
+        )
+    return None
+
+
 BOX_W = 62
 
 
@@ -820,6 +843,9 @@ def _print_quote_block(code, quote):
     bid_levels = quote.get("bid_levels") or []
     ask_levels = quote.get("ask_levels") or []
     warnings = _quote_warning(quote)
+    base_warn = _base_price_deviation(CONFIGS.get(code), quote.get("price"))
+    if base_warn:
+        warnings = (warnings or []) + [base_warn]
 
     print()
     _header(f"{name} ({code}) 下单前行情快照")
@@ -985,6 +1011,10 @@ def cmd_status(etf_code=None, price_str=None):
     print()
     _header(f"{cfg['name']} ({etf_code}) 网格状态")
     _row(f"📍 当前价: ¥{cp}  │  动态基准价: ¥{current_bp}")
+    if price_src != "manual":
+        base_warn = _base_price_deviation(cfg, cp)
+        if base_warn:
+            _row(base_warn)
 
     if next_sell:
         d = (next_sell.price - cp) / cp * 100
@@ -2775,6 +2805,119 @@ def _fetch_ohlc_data(etf_code, count=1500, as_of=None):
     )
 
 
+def analyze_trend(code: str):
+    """趋势分析结构化接口，供 strategy_monitor 等外部模块调用。
+
+    基于 MA 均线 + 布林带宽度判断是否适合网格运行。
+    对标 Grid-Bot-2 的布林带区间检测 + Dynamic-Grid-Trading 的趋势自适应。
+
+    Returns:
+        dict 包含字段:
+        - code: ETF 代码
+        - etf: 同 code
+        - name: ETF 名称
+        - status: "ok" 或 "unknown"
+        - score: 趋势评分 (正=震荡有利, 负=趋势不利)
+        - bb_width: 布林带宽度百分比
+        - ma_state: MA 状态描述 (e.g. "多头排列", "空头排列", "缠绕")
+        - verdict: 综合判断文本
+    """
+    cfg = CONFIGS.get(code, {})
+    name = cfg.get("name", code)
+
+    try:
+        closes = _fetch_kline_for_ma(code, 120)
+    except Exception:
+        closes = []
+
+    if len(closes) < 60:
+        return {
+            "code": code,
+            "etf": code,
+            "name": name,
+            "status": "unknown",
+            "score": None,
+            "close": None,
+            "ma20": None,
+            "ma60": None,
+            "bb_width": None,
+            "bb_upper": None,
+            "bb_lower": None,
+            "ma_state": None,
+            "verdict": None,
+            "error": f"K线数据不足 ({len(closes)} 日，需 >=60)",
+        }
+
+    current_price = closes[-1]
+    ma20 = _calc_ma(closes, 20)
+    ma60 = _calc_ma(closes, 60)
+    bb_ma, bb_upper, bb_lower, bb_width = _calc_bollinger(closes, 20)
+
+    trend_score = 0  # 正=震荡有利, 负=趋势不利
+    ma_state = "未知"
+
+    # 1. MA 方向判断
+    if ma20 and ma60:
+        near_ma20 = abs(current_price - ma20) / current_price < 0.01
+
+        if near_ma20:
+            if bb_width and bb_width < 8:
+                trend_score += 2
+                ma_state = "MA20附近震荡"
+            else:
+                trend_score += 1
+                ma_state = "MA20附近偏震荡"
+        elif current_price > ma20 > ma60:
+            trend_score -= 1
+            ma_state = "多头排列"
+        elif current_price < ma20 < ma60:
+            trend_score -= 2
+            ma_state = "空头排列"
+        elif abs(current_price - ma20) / current_price < 0.02:
+            trend_score += 2
+            ma_state = "MA20附近"
+        else:
+            trend_score += 1
+            ma_state = "缠绕"
+
+    # 2. 布林带宽度
+    if bb_width is not None:
+        if bb_width < 4:
+            trend_score += 3
+        elif bb_width < 8:
+            trend_score += 1
+        else:
+            trend_score -= 2
+
+    # 3. 综合判断
+    if trend_score >= 4:
+        verdict = "震荡市 — 网格最佳环境，全力运行"
+    elif trend_score >= 1:
+        verdict = "偏震荡 — 网格正常运行"
+    elif trend_score >= -1:
+        verdict = "偏趋势 — 网格谨慎运行，关注方向"
+    elif trend_score >= -3:
+        verdict = "趋势市 — 建议暂停反向网格，仅保留顺势方向"
+    else:
+        verdict = "强趋势 — 暂停所有网格，等待回归震荡"
+
+    return {
+        "code": code,
+        "etf": code,
+        "name": name,
+        "status": "ok",
+        "score": trend_score,
+        "close": round(current_price, 4),
+        "ma20": round(ma20, 4) if ma20 is not None else None,
+        "ma60": round(ma60, 4) if ma60 is not None else None,
+        "bb_width": round(bb_width, 1) if bb_width is not None else None,
+        "bb_upper": round(bb_upper, 4) if bb_upper is not None else None,
+        "bb_lower": round(bb_lower, 4) if bb_lower is not None else None,
+        "ma_state": ma_state,
+        "verdict": verdict,
+    }
+
+
 def cmd_trend(etf_code=None):
     """趋势过滤器：MA 均线 + 布林带宽度，判断是否适合网格运行。
 
@@ -2814,49 +2957,36 @@ def cmd_trend(etf_code=None):
         atr_pct = None
         recommended_spacing = None
 
-    # 判断市场状态
+    # 调用结构化分析获取趋势评分和判断
+    trend_result = analyze_trend(etf_code)
+    trend_score = trend_result.get("score", 0)
+
+    # 判断市场状态（为 CLI 展示重建信号列表）
     signals = []
-    trend_score = 0  # 正=震荡有利, 负=趋势不利
-
-    # 1. MA 方向判断
     if ma20 and ma60:
-        near_ma20 = abs(current_price - ma20) / current_price < 0.01  # 价格在 MA20 ±1% 内
-
+        near_ma20 = abs(current_price - ma20) / current_price < 0.01
         if near_ma20:
-            # 价格贴着 MA20: 优先按附近震荡处理，不按多头/空头排列
-            # 避免价格在 MA20 上下 1 厘钱波动导致评分在 +2 和 -2 之间跳跃
             if bb_width and bb_width < 8:
                 signals.append(("✅", "价格在 MA20 附近 → 震荡，网格活跃"))
-                trend_score += 2
             else:
                 signals.append(("🟡", f"价格在 MA20 附近但 BB 未收窄({bb_width:.1f}%) → 温和偏震荡"))
-                trend_score += 1
         elif current_price > ma20 > ma60:
             signals.append(("🟢", "多头排列 (价格>MA20>MA60) → 上涨趋势，优先做卖出网格"))
-            trend_score -= 1
         elif current_price < ma20 < ma60:
             signals.append(("🔴", "空头排列 (价格<MA20<MA60) → 下跌趋势，暂停买入网格"))
-            trend_score -= 2
         elif abs(current_price - ma20) / current_price < 0.02:
             signals.append(("✅", "价格在 MA20 附近 → 震荡，网格活跃"))
-            trend_score += 2
         else:
             signals.append(("🟡", "均线缠绕 → 方向不明，网格正常"))
-            trend_score += 1
 
-    # 2. 布林带宽度（Grid-Bot-2 核心指标）
     if bb_width:
         if bb_width < 4:
             signals.append(("✅", f"布林带收窄 (宽度 {bb_width:.1f}%) → 区间震荡，网格最理想"))
-            trend_score += 3
         elif bb_width < 8:
             signals.append(("🟡", f"布林带正常 (宽度 {bb_width:.1f}%) → 正常波动"))
-            trend_score += 1
         else:
             signals.append(("🔴", f"布林带扩张 (宽度 {bb_width:.1f}%) → 趋势市，网格应暂停"))
-            trend_score -= 2
 
-    # 3. ATR 间距建议
     if atr_pct:
         cfg_sp = float(_sp_up(cfg) + _sp_down(cfg)) / 2
         if recommended_spacing:
@@ -2879,17 +3009,7 @@ def cmd_trend(etf_code=None):
         _row(f"{icon} {msg}")
     _thin()
 
-    if trend_score >= 4:
-        verdict = "✅ 震荡市 — 网格最佳环境，全力运行"
-    elif trend_score >= 1:
-        verdict = "🟢 偏震荡 — 网格正常运行"
-    elif trend_score >= -1:
-        verdict = "🟡 偏趋势 — 网格谨慎运行，关注方向"
-    elif trend_score >= -3:
-        verdict = "🔴 趋势市 — 建议暂停反向网格，仅保留顺势方向"
-    else:
-        verdict = "⛔ 强趋势 — 暂停所有网格，等待回归震荡"
-
+    verdict = trend_result.get("verdict", "")
     _row(f"综合评分: {trend_score:+d}  →  {verdict}")
     _row(f"参考: Grid-Bot-2 布林带区间检测 + Dynamic-Grid-Trading 趋势自适应")
     _footer()
@@ -2954,25 +3074,33 @@ def main():
     etf = None
     price = None
     force_direction = None  # "buy" / "sell" / None
-    for a in args[1:]:
-        if a in ("--buy", "-b"):
-            force_direction = "buy"
-        elif a in ("--sell", "-s"):
-            force_direction = "sell"
-        elif a in CONFIGS or (cmd == "quote" and len(a) == 6 and a.isdigit()):
-            etf = a
-        elif len(a) == 6 and a.isdigit():
+    option_tokens = {
+        "--buy", "-b", "--sell", "-s",
+        "--start", "--end", "--capital", "--spacing", "--levels", "--shares", "--json",
+    }
+    no_value_options = {"--buy", "-b", "--sell", "-s", "--json"}
+    index = 1
+    while index < len(args):
+        token = args[index]
+        if token in option_tokens:
+            # 跳过选项及其值，避免把 6 位数值（如 --capital 100000）误判为 ETF 代码
+            index += 1 if token in no_value_options else 2
+            continue
+        if token in CONFIGS or (cmd == "quote" and len(token) == 6 and token.isdigit()):
+            etf = token
+        elif len(token) == 6 and token.isdigit():
             # 6 位数字但不在 CONFIGS 中，非 quote 命令 → 报错
-            print(f"未找到配置: {a}")
+            print(f"未找到配置: {token}")
             print(f"已配置的 ETF: {', '.join(CONFIGS.keys())}")
             print(f"如需添加，请编辑 tools/grid_trading.py 顶部的 CONFIGS 字典")
             sys.exit(1)
         else:
             try:
-                D(a)
-                price = a
+                D(token)
+                price = token
             except Exception:
                 pass
+        index += 1
 
     if cmd == "table":
         cmd_table(etf)

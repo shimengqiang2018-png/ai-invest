@@ -26,19 +26,22 @@ import copy
 import json
 import math
 import os
-import subprocess
 import sys
-import time
-from collections import defaultdict
 from datetime import datetime, timedelta
 
 try:
     from tools.etf_market_data import MarketDataSeries, load_etf_series, truncate_series
-    from tools.momentum_core import MomentumConfig, SignalSnapshot, evaluate_momentum_signal, rank_momentum_signals
+    from tools.momentum_core import (
+        MomentumConfig, STOP_LOSS_PCT, SignalSnapshot,
+        evaluate_momentum_signal, rank_momentum_signals,
+    )
     from tools.trading_ledger import ExecutionConfig, TradingLedger, compute_buy_quantity
 except ModuleNotFoundError:  # 支持直接执行 tools/momentum_etf_backtest.py
     from etf_market_data import MarketDataSeries, load_etf_series, truncate_series
-    from momentum_core import MomentumConfig, SignalSnapshot, evaluate_momentum_signal, rank_momentum_signals
+    from momentum_core import (
+        MomentumConfig, STOP_LOSS_PCT, SignalSnapshot,
+        evaluate_momentum_signal, rank_momentum_signals,
+    )
     from trading_ledger import ExecutionConfig, TradingLedger, compute_buy_quantity
 
 _TIMEOUT = 15
@@ -80,65 +83,6 @@ PRESET_POOLS = {
 # 货币ETF（持币用，但回测中直接算现金）
 CASH_PROXY = "CASH"
 
-# ==============================================================================
-# 数据获取 — 复用 ashare_data.py 的腾讯K线接口逻辑
-# ==============================================================================
-
-def _qq_code(code: str) -> str:
-    """股票/指数代码 → 腾讯行情格式。"""
-    code = code.strip().replace(".SH", "").replace(".SZ", "").replace(".BJ", "")
-    # 沪市指数: 000xxx, 950xxx, 930xxx 等
-    if code.startswith(("000", "950", "930", "931", "932", "933")):
-        return "sh" + code
-    if code.startswith(("399", "391", "392", "393", "394", "395", "396", "397", "398")):
-        return "sz" + code
-    if code.startswith(("6", "9", "5")):
-        return "sh" + code
-    elif code.startswith(("0", "3", "2", "1")):
-        return "sz" + code
-    elif code.startswith(("4", "8")):
-        return "bj" + code
-    return "sh" + code
-
-
-def _curl_json(url):
-    """curl 获取 JSON，绕过代理。"""
-    result = subprocess.run(
-        ["/usr/bin/curl", "-s", "--noproxy", "*",
-         "-H", "User-Agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)",
-         url],
-        capture_output=True, timeout=_TIMEOUT,
-    )
-    if result.returncode != 0 or not result.stdout.strip():
-        raise ConnectionError(f"请求失败: {url}")
-    raw = result.stdout
-    try: return json.loads(raw.decode("utf-8"))
-    except UnicodeDecodeError: return json.loads(raw.decode("gbk"))
-
-
-def _curl_text(url):
-    """curl 获取文本（非JSON），绕过代理。"""
-    result = subprocess.run(
-        ["/usr/bin/curl", "-s", "--noproxy", "*",
-         "-H", "User-Agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)",
-         url],
-        capture_output=True, timeout=_TIMEOUT,
-    )
-    if result.returncode != 0 or not result.stdout.strip():
-        raise ConnectionError(f"请求失败: {url}")
-    try: return result.stdout.decode("utf-8")
-    except: return result.stdout.decode("gbk")
-
-
-def _sina_symbol(code: str) -> str:
-    """ETF代码 → 新浪行情符号。"""
-    code = code.strip().replace(".SH", "").replace(".SZ", "").replace(".BJ", "")
-    if code.startswith(("6", "9", "5", "000", "950", "930")):
-        return "sh" + code
-    else:
-        return "sz" + code
-
-
 class MarketBars(list):
     """兼容 list 调用方，同时保留行情 manifest。"""
 
@@ -161,63 +105,6 @@ def fetch_kline(
     if as_of is not None and series.manifest.end_date > as_of:
         series = truncate_series(series, as_of)
     return MarketBars(series.bars, series.manifest)
-
-
-# ==============================================================================
-# 指标计算
-# ==============================================================================
-
-def calc_ma(closes: list[float], period: int) -> list[float]:
-    """移动均线，返回与输入等长的列表，前面不足 period 的位置为 None。"""
-    result = [None] * len(closes)
-    if len(closes) < period:
-        return result
-    window = sum(closes[:period])
-    result[period - 1] = window / period
-    for i in range(period, len(closes)):
-        window += closes[i] - closes[i - period]
-        result[i] = window / period
-    return result
-
-
-def annualized_volatility(closes: list[float], period: int = 20) -> float:
-    """年化波动率（基于日收益率标准差 × √252）。"""
-    if len(closes) < period + 1:
-        return 0.0
-    # 取最近 period 个交易日的日收益率
-    window = closes[-(period + 1):]
-    returns = []
-    for i in range(1, len(window)):
-        if window[i - 1] and window[i - 1] > 0:
-            returns.append(math.log(window[i] / window[i - 1]))
-    if len(returns) < 2:
-        return 0.0
-    mean_r = sum(returns) / len(returns)
-    variance = sum((r - mean_r) ** 2 for r in returns) / (len(returns) - 1)
-    return math.sqrt(variance) * math.sqrt(252)
-
-
-def historical_vol_median(closes: list[float], period: int = 20) -> float:
-    """历史滚动20日波动率中位数（用作过热阈值基准）。"""
-    if len(closes) < period * 2:
-        return annualized_volatility(closes, period)
-
-    vols = []
-    for i in range(period, len(closes)):
-        window = closes[i - period:i + 1]
-        returns = []
-        for j in range(1, len(window)):
-            if window[j - 1] and window[j - 1] > 0:
-                returns.append(math.log(window[j] / window[j - 1]))
-        if len(returns) >= 2:
-            mean_r = sum(returns) / len(returns)
-            variance = sum((r - mean_r) ** 2 for r in returns) / (len(returns) - 1)
-            vols.append(math.sqrt(variance) * math.sqrt(252))
-    vols.sort()
-    if not vols:
-        return 0.0
-    mid = len(vols) // 2
-    return vols[mid]
 
 
 # ==============================================================================
@@ -282,102 +169,12 @@ def calc_rsrs(klines: list[dict], idx: int, period: int = 20) -> tuple[float, fl
 # 信号引擎（v2.0: RSRS 动量排名）
 # ==============================================================================
 
-def check_signal(code: str, klines: list[dict], idx: int, hist_vol_medians: dict = None,
-                 momentum_period: int = 20, ma_period: int = 20,
-                 *, config=None) -> dict | None:
-    """在 klines[idx] 位置检查买入信号。
-
-    当提供 config (MomentumConfig) 时，委托给共享核心 evaluate_momentum_signal，
-    返回 SignalSnapshot（兼容 parity 测试）。此时 hist_vol_medians 可省略。
-
-    否则使用旧版五条件 dict 实现（向后兼容现有回测调用）。
-    """
-    if config is not None:
-        # 使用共享核心统一评估
-        bars_tuple = tuple(klines[:idx + 1])  # 截断到信号日，不含未来数据
-        return evaluate_momentum_signal(code, bars_tuple, idx, config)
-    # --- 旧版实现（向后兼容） ---
-    if idx < momentum_period + 1:  # 需要至少 momentum_period+1 个交易日的历史数据
-        return None
-
-    closes = [k["close"] for k in klines[:idx + 1]]
-    current_close = closes[-1]
-
-    # 条件一：RSRS 动量 = 年化斜率 × R²（趋势强度 × 趋势质量）
-    rsrs_score, slope_pct, r_squared = calc_rsrs(klines, idx, momentum_period)
-    if rsrs_score <= 0:
-        return None  # 趋势向下或无趋势，直接淘汰
-
-    # 条件二：收盘价 > N日均线
-    mas = calc_ma(closes, ma_period)
-    ma_val = mas[-1]
-    if ma_val is None or current_close <= ma_val:
-        return None
-
-    # 条件三：波动率不过热
-    current_vol = annualized_volatility(closes, 20)
-    median_vol = hist_vol_medians.get(code, 0.4)
-    if median_vol > 0 and current_vol > median_vol * 1.5:
-        return None
-
-    # 条件四（v2.1 新增，对齐实盘扫描器）：成交量异动过滤
-    volumes = [k["volume"] for k in klines[:idx + 1]]
-    if len(volumes) >= 7:
-        avg_vol_5d = sum(volumes[-6:-1]) / 5
-        today_vol = volumes[-1]
-        if avg_vol_5d > 0 and today_vol / avg_vol_5d > 2.5:
-            return None
-
-    # 条件五（v2.1 新增，对齐实盘扫描器）：RSI(14) 超买过滤
-    if len(closes) >= 15:
-        gains, losses = [], []
-        for i in range(-14, 0):
-            diff = closes[i] - closes[i - 1]
-            if diff > 0:
-                gains.append(diff)
-                losses.append(0)
-            else:
-                gains.append(0)
-                losses.append(abs(diff))
-        avg_gain = sum(gains) / 14 if gains else 0
-        avg_loss = sum(losses) / 14 if losses else 0
-        if avg_loss > 0:
-            rsi = 100 - (100 / (1 + avg_gain / avg_loss))
-        else:
-            rsi = 100
-        if rsi > 80:
-            return None
-
-    # 辅助: 双均线多头（v2.1 新增）
-    golden_cross = False
-    if len(closes) >= 60:
-        ma60_vals = calc_ma(closes, 60)
-        ma60_last = ma60_vals[-1] if ma60_vals else None
-        golden_cross = ma60_last is not None and ma_val > ma60_last
-
-    # 辅助: 简单涨幅（仅展示，不参与排名）
-    if len(closes) >= momentum_period + 1:
-        close_n_days_ago = closes[-(momentum_period + 1)]
-        pct_n_days = (current_close - close_n_days_ago) / close_n_days_ago * 100
-    else:
-        pct_n_days = 0
-
-    return {
-        "code": code,
-        "date": klines[idx]["date"],
-        "close": current_close,
-        # v2.1 核心指标
-        "rsrs_score": rsrs_score,
-        "slope_annual_pct": slope_pct,
-        "r_squared": r_squared,
-        # 辅助指标
-        "pct_n_days": round(pct_n_days, 2),
-        "ma": round(ma_val, 4),
-        "vol_current": round(current_vol * 100, 2),
-        "vol_median": round(median_vol * 100, 2),
-        "vol_ratio": round(current_vol / median_vol, 2) if median_vol > 0 else 1.0,
-        "golden_cross": golden_cross,  # v2.1
-    }
+def check_signal(
+    code: str, klines: list[dict], idx: int, *, config: MomentumConfig
+) -> SignalSnapshot:
+    """委托共享核心计算历史信号，供 parity 测试和兼容调用使用。"""
+    bars_tuple = tuple(klines[:idx + 1])
+    return evaluate_momentum_signal(code, bars_tuple, idx, config)
 
 
 def rank_signals(signals: list) -> dict | None:
@@ -403,11 +200,12 @@ def run_backtest(
     start_date: str,
     end_date: str = None,
     freq: str = "weekly",
-    momentum_period: int = 20,
+    momentum_period: int = 25,
     include_bench: bool = True,
     quiet: bool = False,
     market_data=None,
     execution: ExecutionConfig = ExecutionConfig(),
+    switch_buffer: float = 1.0,
 ) -> dict:
     """运行动量轮动回测。
 
@@ -481,6 +279,16 @@ def run_backtest(
     if not end_date:
         end_date = max(k[-1]["date"] for k in all_klines.values())
 
+    # 窗口截断检测: 请求起点与实际起点差距超过90天时警告并标记
+    window_truncated = False
+    if start_date < effective_start:
+        delta = (datetime.strptime(effective_start, "%Y-%m-%d") -
+                 datetime.strptime(start_date, "%Y-%m-%d")).days
+        window_truncated = delta > 90
+        if window_truncated and not quiet:
+            print(f"  ⚠️  数据窗口截断: 请求起点 {start_date}，实际起点 {effective_start}"
+                  f"（延迟 {delta} 天），回测结果不代表完整请求期")
+
     if not quiet:
         print(f"\n  回测区间: {effective_start} ~ {end_date}")
         print(f"  （有效起点: 所有ETF均满足252日预热的最晚日期）")
@@ -538,6 +346,7 @@ def run_backtest(
     position = None  # {"code": str, "shares": int, "lots": [(date, shares, cost)]}
     trades: list[dict] = []
     daily_nav: list[tuple[str, float]] = []
+    stop_loss_audits: list[dict] = []
     pending_order = None
     last_close: dict[str, float] = {}  # 缺价时沿用最近已知收盘价
 
@@ -634,6 +443,7 @@ def run_backtest(
                                 "code": to_code,
                                 "shares": ledger_position.shares,
                                 "lots": ledger_position.lots,
+                                "entry_fill": entry.fill_price,
                             }
                             trades.append(_make_trade(entry, "买入"))
                 # 缺价: 保持持仓不动（若刚已卖出则持币）
@@ -652,33 +462,56 @@ def run_backtest(
             elif pos_code in last_close:
                 # 缺价: 沿用最近已知收盘价估值（不将持仓归零）
                 nav += position["shares"] * last_close[pos_code]
+            # 止损审计: 检查持仓收盘价是否触发 8% 止损线
+            if position and "entry_fill" in position:
+                if date in kline_index.get(position["code"], {}):
+                    idx = kline_index[position["code"]][date]
+                    c = all_klines[position["code"]][idx]["close"]
+                    stop_line = position["entry_fill"] * (1 - STOP_LOSS_PCT)
+                    if c <= stop_line:
+                        stop_loss_audits.append({
+                            "date": date,
+                            "code": position["code"],
+                            "entry_fill": position["entry_fill"],
+                            "close": c,
+                            "stop_line": round(stop_line, 4),
+                            "loss_pct": round((c / position["entry_fill"] - 1) * 100, 2),
+                        })
         daily_nav.append((date, round(nav, 2)))
 
-        # 5c. 信号检查日: 评估信号并创建 pending order
+        # 5c. 信号检查日: 评估全量信号，按迟滞规则决策
         if date in check_dates_set:
             signal_config = MomentumConfig(
                 rsrs_period=momentum_period,
-                ma_period=momentum_period,
+                # 策略规范: 收盘 > MA20（与信号扫描器 momentum_signal 保持一致）
+                ma_period=MomentumConfig().ma_period,
             )
-            all_signals = []
+            all_snapshots = []
             for code in pool:
                 if code not in kline_index or date not in kline_index[code]:
                     continue
                 idx = kline_index[code][date]
                 klines = all_klines[code]
-                sig = evaluate_momentum_signal(code, tuple(klines), idx, signal_config)
-                if sig.passed:
-                    all_signals.append(sig)
+                all_snapshots.append(
+                    evaluate_momentum_signal(code, tuple(klines), idx, signal_config)
+                )
 
-            best = rank_signals(all_signals) if all_signals else None
+            holding_code = position["code"] if position else None
+            try:
+                from tools.momentum_core import select_rotation_target
+            except ModuleNotFoundError:
+                from momentum_core import select_rotation_target
+            rotation = select_rotation_target(
+                holding_code, all_snapshots, switch_buffer
+            )
 
-            if best:
-                best_code = best.code
-                if position and position["code"] == best_code:
-                    # 持仓已经是排名第一，不动
+            if rotation["action"] in ("buy", "switch") and rotation["target"]:
+                target_code = rotation["target"].code
+                if (position and position["code"] == target_code
+                        and rotation["action"] == "hold"):
                     continue
-                required_codes = [best_code]
-                if position:
+                required_codes = [target_code]
+                if position and position["code"] != target_code:
                     required_codes.append(position["code"])
                 exec_date = _next_trading_day(date, required_codes)
                 if exec_date is None:
@@ -686,22 +519,16 @@ def run_backtest(
                 pending_order = {
                     "signal_date": date,
                     "exec_date": exec_date,
-                    "buy": {
-                        "code": best_code,
-                        "reason": (
-                            f"RSRS {best.raw_rsrs_score:.2f} | "
-                            f"斜率 {best.slope_annual_pct:+.1f}%×R² {best.r_squared:.3f} | "
-                            f"波动率 {best.metrics.get('current_volatility', 0)*100:.1f}% ≤ "
-                            f"{best.metrics.get('historical_volatility_median', 0)*100:.1f}%×1.5"
-                        ),
-                    },
                 }
-                if position:
+                if position and position["code"] != target_code:
                     pending_order["sell"] = {
-                        "reason": f"换入 {pool[best_code]}",
+                        "reason": f"换入 {pool[target_code]}（{rotation['reason']}）",
                     }
-            else:
-                # 无信号: 若持仓则在持仓有开盘价的下一交易日清仓。
+                pending_order["buy"] = {
+                    "code": target_code,
+                    "reason": rotation["reason"],
+                }
+            elif rotation["action"] == "liquidate":
                 if position:
                     exec_date = _next_trading_day(date, [position["code"]])
                     if exec_date is None:
@@ -710,9 +537,10 @@ def run_backtest(
                         "signal_date": date,
                         "exec_date": exec_date,
                         "sell": {
-                            "reason": "池内无标的满足条件，清仓持币",
+                            "reason": rotation["reason"],
                         },
                     }
+            # hold / none: 不动
 
     # ── 6. 期末估值: final_nav = daily_nav[-1]（NAV 恒等式） ──
     if daily_nav:
@@ -806,7 +634,7 @@ def run_backtest(
     # ── 9. 汇总结果 ──
     result = {
         "strategy": {
-            "name": "ETF动量轮动（RSRS v2.1）",
+            "name": "ETF动量轮动（RSRS v3.0）",
             "rules": [
                 f"RSRS 动量（年化斜率×R²）排名第一",
                 f"收盘价 > MA{momentum_period}",
@@ -816,9 +644,11 @@ def run_backtest(
             "pool": pool,
         },
         "period": {
+            "requested_start": start_date,
             "start": effective_start,
             "end": end_date,
             "years": round(years, 2),
+            "window_truncated": window_truncated,
         },
         "performance": {
             "initial_capital": 100000,
@@ -847,6 +677,7 @@ def run_backtest(
         "data_manifest": {
             code: manifest.__dict__ for code, manifest in manifests.items()
         },
+        "stop_loss_audit": stop_loss_audits,
         "execution_config": {
             "commission_rate": str(ex_config.commission_rate),
             "slippage_rate": str(ex_config.slippage_rate),
@@ -858,61 +689,6 @@ def run_backtest(
     }
 
     return result
-
-
-# ==============================================================================
-# 日频 NAV 构建 & 风险指标（消除双周采样偏差）
-# ==============================================================================
-
-def _build_daily_nav(all_klines, trades, start_date, end_date):
-    """从交易记录+日K线重建日频 NAV 序列。"""
-    # 收集所有交易日
-    ref_code = list(all_klines.keys())[0]
-    all_dates = sorted(set(k["date"] for k in all_klines[ref_code]))
-    valid_dates = [d for d in all_dates if start_date <= d <= (end_date or d)]
-
-    if len(valid_dates) < 5:
-        return []
-
-    # 构建日期→收盘价映射
-    price_map = {}
-    for code, bars in all_klines.items():
-        price_map[code] = {b["date"]: b["close"] for b in bars}
-
-    # 按日期索引交易
-    from collections import defaultdict
-    trades_by_date = defaultdict(list)
-    for t in trades:
-        trades_by_date[t["date"]].append(t)
-
-    cash = 100000.0
-    position = None
-    navs = []
-
-    for date in valid_dates:
-        # 执行当日收盘后交易
-        for t in trades_by_date.get(date, []):
-            if "买入" in t["action"]:
-                pos_close = t["price"]
-                shares = int(cash / pos_close / 100) * 100
-                if shares >= 100:
-                    cash -= shares * pos_close
-                    position = {"code": t["code"], "shares": shares}
-            elif "卖出" in t["action"]:
-                if position and position["code"] == t["code"]:
-                    cash += position["shares"] * t["price"]
-                    position = None
-
-        # 按当日收盘价计算 NAV
-        nav = cash
-        if position:
-            pcode = position["code"]
-            if date in price_map[pcode]:
-                nav += position["shares"] * price_map[pcode][date]
-
-        navs.append((date, round(nav, 2)))
-
-    return navs
 
 
 def _compute_daily_risk_metrics(daily_navs):
@@ -1207,6 +983,7 @@ def run_rolling_backtest(
     step_months: int = 3,
     freq: str = "biweekly",
     momentum_period: int = 60,
+    switch_buffer: float = 1.0,
 ) -> list[dict]:
     """滚动窗口回测。
 
@@ -1264,6 +1041,7 @@ def run_rolling_backtest(
             include_bench=True,
             quiet=True,
             market_data=all_klines,
+            switch_buffer=switch_buffer,
         )
         if r:
             p = r["performance"]
@@ -1378,7 +1156,8 @@ def print_rolling_report(results: list[dict]):
     print(f"  └─────────────────────────────────────────────────────┘")
 
 
-def run_batch(presets, momentums, freq, start_date, end_date, include_bench):
+def run_batch(presets, momentums, freq, start_date, end_date, include_bench,
+              switch_buffer: float = 1.0):
     """批量对比: 多个ETF池 × 多个动量周期 → 汇总对比表。"""
     print(f"\n{'='*90}")
     print(f"  批量对比 — {len(presets)}个池 × {len(momentums)}个动量周期")
@@ -1399,6 +1178,7 @@ def run_batch(presets, momentums, freq, start_date, end_date, include_bench):
                     pool=pool, start_date=start_date, end_date=end_date,
                     freq=freq, momentum_period=mp,
                     include_bench=include_bench, quiet=True,
+                    switch_buffer=switch_buffer,
                 )
                 if r:
                     p = r["performance"]
@@ -1417,6 +1197,9 @@ def run_batch(presets, momentums, freq, start_date, end_date, include_bench):
                         "num_trades": p["num_trades"],
                         "win_rate": round(wr, 1),
                         "period_years": r["period"]["years"],
+                        "window_start": r["period"]["start"],
+                        "window_end": r["period"]["end"],
+                        "window_truncated": r["period"].get("window_truncated", False),
                     })
                 else:
                     print("❌ 数据不足")
@@ -1431,9 +1214,15 @@ def run_batch(presets, momentums, freq, start_date, end_date, include_bench):
     print(f"\n{'='*90}")
     print(f"  对比汇总（按年化收益排序）")
     print(f"{'='*90}")
+
+    # 检测窗口不一致
+    windows = {(r["window_start"], r["window_end"]) for r in all_results}
+    if len(windows) > 1:
+        print(f"  ⚠️ 各组合窗口不一致，年化不可直接比较")
+
     all_results.sort(key=lambda r: r["annual_pct"], reverse=True)
 
-    header = f"  {'池':<12s} {'ETF':>3s} {'周期':>5s} {'年化':>8s} {'总收益':>8s} {'超额':>8s} {'基准':>8s} {'胜率':>6s} {'交易':>5s} {'年限':>5s}"
+    header = f"  {'池':<12s} {'ETF':>3s} {'周期':>5s} {'年化':>8s} {'总收益':>8s} {'超额':>8s} {'基准':>8s} {'胜率':>6s} {'交易':>5s} {'窗口':>12s}"
     print(header)
     print("  " + "-" * (len(header) - 2))
     for r in all_results:
@@ -1442,8 +1231,10 @@ def run_batch(presets, momentums, freq, start_date, end_date, include_bench):
         exc = f"{r['excess_pct']:+.1f}%"
         bmk = f"{r['benchmark_pct']:+.1f}%"
         wr = f"{r['win_rate']:.0f}%"
+        win = r['window_start'][:7] if r['window_start'] else '?'
         flag = "✅" if r["excess_pct"] > 0 else "🔴"
-        print(f"  {r['preset']:<12s} {r['etf_count']:>3d} {r['momentum']:>4d}日 {ann:>8s} {ret:>8s} {exc:>8s} {bmk:>8s} {wr:>6s} {r['num_trades']:>4d} {r['period_years']:>4.1f}年 {flag}")
+        trunc = " ⚠️" if r.get("window_truncated") else ""
+        print(f"  {r['preset']:<12s} {r['etf_count']:>3d} {r['momentum']:>4d}日 {ann:>8s} {ret:>8s} {exc:>8s} {bmk:>8s} {wr:>6s} {r['num_trades']:>4d} {win:>12s}{trunc}")
 
     # ── 最佳组合 ──
     best = all_results[0]
@@ -1481,8 +1272,20 @@ def main():
         help="信号检查频率（默认 biweekly）",
     )
     parser.add_argument(
-        "--momentum", type=int, default=20,
+        "--momentum", type=int, default=25,
         help="动量/均线周期（默认20日）",
+    )
+    parser.add_argument(
+        "--commission-rate", type=float, default=None,
+        help="单边佣金费率（小数，如 0.00025=万2.5；默认 0.00025）",
+    )
+    parser.add_argument(
+        "--min-commission", type=float, default=None,
+        help="单笔最低佣金（元，0=免5；默认 0=免5）",
+    )
+    parser.add_argument(
+        "--slippage-rate", type=float, default=None,
+        help="单边滑点费率（小数，默认 0.0005）",
     )
     parser.add_argument("--no-bench", action="store_true", help="不计算基准收益")
     parser.add_argument("--csv", action="store_true", help="输出交易记录CSV")
@@ -1511,6 +1314,10 @@ def main():
         "--batch-momentums", default="20,40,60",
         help="批量对比的动量周期列表（逗号分隔，默认 20,40,60）",
     )
+    parser.add_argument(
+        "--switch-buffer", type=float, default=1.0,
+        help="换仓迟滞系数（默认 1.0=无迟滞，≥1.0；如 1.25 表示挑战者RSRS需超持仓25%%才换仓）",
+    )
 
     args = parser.parse_args()
 
@@ -1533,6 +1340,7 @@ def main():
             start_date=args.start,
             end_date=args.end,
             include_bench=not args.no_bench,
+            switch_buffer=args.switch_buffer,
         )
         return
 
@@ -1553,6 +1361,7 @@ def main():
             step_months=args.step,
             freq=args.freq,
             momentum_period=args.momentum,
+            switch_buffer=args.switch_buffer,
         )
         if results:
             print_rolling_report(results)
@@ -1560,6 +1369,17 @@ def main():
                 print(json.dumps(results, indent=2, ensure_ascii=False, default=str))
     else:
         # 单次回测模式
+        execution = ExecutionConfig(
+            commission_rate=(
+                str(args.commission_rate) if args.commission_rate is not None else "0.00025"
+            ),
+            minimum_commission=(
+                str(args.min_commission) if args.min_commission is not None else "0"
+            ),
+            slippage_rate=(
+                str(args.slippage_rate) if args.slippage_rate is not None else "0.0005"
+            ),
+        )
         result = run_backtest(
             pool=pool,
             start_date=args.start,
@@ -1567,6 +1387,8 @@ def main():
             freq=args.freq,
             momentum_period=args.momentum,
             include_bench=not args.no_bench,
+            switch_buffer=args.switch_buffer,
+            execution=execution,
         )
 
         if not result:

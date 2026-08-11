@@ -7,8 +7,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import date
 from decimal import Decimal
-from typing import Optional
 
 
 @dataclass(frozen=True)
@@ -16,15 +16,10 @@ class ExecutionConfig:
     """交易执行参数，全局唯一口径。"""
     commission_rate: Decimal = Decimal("0.00025")   # 单边佣金费率
     slippage_rate: Decimal = Decimal("0.0005")       # 单边滑点费率
-    minimum_commission: Decimal = Decimal("0")        # 最低佣金（免五=0）
+    minimum_commission: Decimal = Decimal(0)        # 最低佣金（免五=0）
     board_lot: int = 100                              # 最小交易单位（股）
-    etf_tax_rate: Decimal = Decimal("0")              # ETF 交易税费
-    cash_return_rate: Decimal = Decimal("0")          # 现金年化收益
-
-
-def _round_down(value: Decimal, lot: int) -> int:
-    """向下取整到 board_lot 的整数倍。"""
-    return (int(value) // lot) * lot
+    etf_tax_rate: Decimal = Decimal(0)              # ETF 交易税费
+    cash_return_rate: Decimal = Decimal(0)          # 现金年化收益
 
 
 def _round_down_shares(value: float, lot: int) -> int:
@@ -74,6 +69,28 @@ class TradingLedger:
     entries: list[LedgerEntry] = field(default_factory=list)
     cash: float = 100000.0
     positions: dict[str, Position] = field(default_factory=dict)
+    total_cash_return: float = 0.0
+    last_cash_accrual_date: str | None = None
+
+    def accrue_cash_return(self, trading_date: str) -> float:
+        """按 ISO 交易日计提现金收益；同日重复调用不重复计提。"""
+        parsed_date = date.fromisoformat(trading_date)
+        if parsed_date.isoformat() != trading_date:
+            raise ValueError("现金收益计提日期必须使用 YYYY-MM-DD 格式")
+        if self.last_cash_accrual_date == trading_date:
+            return 0.0
+        if (
+            self.last_cash_accrual_date is not None
+            and parsed_date < date.fromisoformat(self.last_cash_accrual_date)
+        ):
+            raise ValueError("现金收益计提日期不得倒退")
+
+        rate = float(self.execution.cash_return_rate)
+        amount = self.cash * rate / 252 if rate else 0.0
+        self.cash += amount
+        self.total_cash_return += amount
+        self.last_cash_accrual_date = trading_date
+        return amount
 
     def position(self, code: str) -> Position:
         """返回指定代码的账本持仓；不存在时返回并登记空持仓。"""
@@ -183,7 +200,6 @@ class TradingLedger:
             return None  # 持仓不足，卖出失败
 
         fill_price, commission, net_cash_flow = self.quote_sell(reference_price, quantity)
-        gross = fill_price * quantity
 
         # FIFO: 从最早的 lot 开始扣
         remaining = quantity

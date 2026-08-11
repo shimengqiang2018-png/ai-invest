@@ -1,0 +1,59 @@
+{
+  "default_provider": "deepseek",
+  "providers": {
+    "deepseek": {
+      "type": "openai",
+      "base_url": "https://api.deepseek.com",
+      "api_key_env": "DEEPSEEK_API_KEY",
+      "model": "deepseek-chat",
+      "vision": false,
+      "temperature": 0.1,
+      "max_tokens": 4000
+    },
+    "qwen": {
+      "type": "openai",
+      "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+      "api_key_env": "DASHSCOPE_API_KEY",
+      "model": "qwen-vl-max",
+      "vision": true,
+      "temperature": 0.1,
+      "max_tokens": 6000
+    },
+    "zhipu": {
+      "type": "openai",
+      "base_url": "https://open.bigmodel.cn/api/paas/v4",
+      "api_key_env": "ZHIPU_API_KEY",
+      "model": "glm-4v-plus",
+      "vision": true,
+      "temperature": 0.1,
+      "max_tokens": 6000
+    },
+    "moonshot": {
+      "type": "openai",
+      "base_url": "https://api.moonshot.cn/v1",
+      "api_key_env": "MOONSHOT_API_KEY",
+      "model": "moonshot-v1-vision",
+      "vision": true,
+      "temperature": 0.1,
+      "max_tokens": 6000
+    },
+    "anthropic": {
+      "type": "anthropic",
+      "base_url": "https://api.anthropic.com",
+      "api_key_env": "ANTHROPIC_API_KEY",
+      "model": "claude-sonnet-4-20250514",
+      "vision": true,
+      "temperature": 0.1,
+      "max_tokens": 6000
+    },
+    "ollama": {
+      "type": "openai",
+      "base_url": "http://127.0.0.1:11434/v1",
+      "api_key_env": "",
+      "model": "llava",
+      "vision": true,
+      "temperature": 0.1,
+      "max_tokens": 6000
+    }
+  }
+}

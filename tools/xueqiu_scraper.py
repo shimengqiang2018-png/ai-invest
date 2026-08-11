@@ -11,8 +11,8 @@
   - 纯转发过滤：只收录被采集用户自己写的内容（text 非空、非"转发微博"）
 
 凭据通过环境变量传入，**不进入代码仓库**：
-  export XQ_PHONE=13xxxxxxxxx
-  export XQ_PASSWORD=xxx
+  export XQ_PHONE=your_phone
+  export XQ_PASSWORD=your_password
 也可不设，首次运行会弹出 headful 浏览器让你手动登录（扫码/短信/密码随意）。
 
 用法示例：

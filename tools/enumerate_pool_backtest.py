@@ -60,16 +60,20 @@ def main():
     parser.add_argument("--top", type=int, default=30, help="输出前 N 名（默认30）")
     parser.add_argument("--momentum", default="20,40", help="动量周期（默认20,40）")
     parser.add_argument("--json", action="store_true", help="JSON输出")
-    parser.add_argument("--pool", default="full", choices=["full", "veteran"],
-                        help="候选池: full=全量(12只) veteran=长历史(10只,10年+回测)")
+    parser.add_argument("--universe", default="full", choices=["full", "veteran"],
+                        help="预设候选池名称 (full=全12只, veteran=精选10只)")
+    parser.add_argument("--pool", dest="universe", default=argparse.SUPPRESS,
+                        help=argparse.SUPPRESS)  # 已弃用，用 --universe 代替
     parser.add_argument("--start", default=None, help="回测起始日期（默认自动适配）")
+    parser.add_argument("--switch-buffer", type=float, default=1.0,
+                        help="换仓迟滞系数（默认 1.0=无迟滞，如 1.25 表示挑战者需超持仓25%%才换仓）")
     args = parser.parse_args()
 
     momentums = [int(m.strip()) for m in args.momentum.split(",")]
 
     # 选择候选池
-    codes = VETERAN_CODES if args.pool == "veteran" else CANDIDATE_CODES
-    start_date = args.start or ("2016-01-01" if args.pool == "veteran" else "2019-01-01")
+    codes = VETERAN_CODES if args.universe == "veteran" else CANDIDATE_CODES
+    start_date = args.start or ("2016-01-01" if args.universe == "veteran" else "2019-01-01")
 
     # 枚举所有组合
     all_combos = []
@@ -107,6 +111,7 @@ def main():
                     pool=pool, start_date=start_date, end_date=None,
                     freq=FREQ, momentum_period=mp,
                     include_bench=True, quiet=True,
+                    switch_buffer=args.switch_buffer,
                 )
                 if r:
                     p = r["performance"]
@@ -153,6 +158,9 @@ def main():
                         "win_rate": round(wr, 1),
                         "nav_final": round(p["final_nav"], 2),
                         "period_years": round(period["years"], 2),
+                        # 窗口
+                        "window_start": period["start"],
+                        "window_truncated": period.get("window_truncated", False),
                     })
                 else:
                     print("❌ 数据不足")
@@ -171,12 +179,17 @@ def main():
         print(json.dumps(results[:args.top], indent=2, ensure_ascii=False))
         return
 
+    # 检测窗口不一致
+    windows = {(r["window_start"], r["period_years"]) for r in results}
+    if len(windows) > 1:
+        print(f"\n  ⚠️  各组合回测窗口不一致（{len(windows)} 种窗口），年化不可直接比较")
+
     print(f"\n{'='*110}")
     print(f"  🏆 标的池排名 TOP {args.top}（按年化收益）")
     print(f"{'='*110}")
     header = (f"  {'排名':<4s} {'组合':<30s} {'n':>2s} {'年化':>8s} {'总收益':>8s} "
               f"{'MaxDD':>7s} {'回撤天':>6s} {'Vol':>6s} "
-              f"{'Sharpe':>6s} {'Sortino':>7s} {'Calmar':>6s} {'胜率':>5s} {'交易':>4s}")
+              f"{'Sharpe':>6s} {'Sortino':>7s} {'Calmar':>6s} {'胜率':>5s} {'交易':>4s} {'窗口':>8s}")
     print(header)
     print("  " + "-" * (len(header) - 2))
 
@@ -190,11 +203,13 @@ def main():
         so = f"{r['sortino']:.2f}"
         ca = f"{r['calmar']:.2f}"
         wr = f"{r['win_rate']:.0f}%"
+        win = r['window_start'][:7] if r.get('window_start') else '?'
 
         flag = "✅" if r["excess_pct"] > 0 else "🔴"
+        trunc = " ⚠️" if r.get("window_truncated") else ""
         print(f"  {rank:>3d}. {r['label']:<30s} {r['n_etf']:>2d} {ann:>8s} {tot:>8s} "
               f"{dd:>7s} {dd_days:>6s} {vol:>6s} "
-              f"{sh:>6s} {so:>7s} {ca:>6s} {wr:>5s} {r['num_trades']:>4d} {flag}")
+              f"{sh:>6s} {so:>7s} {ca:>6s} {wr:>5s} {r['num_trades']:>4d} {win:>8s}{trunc}")
 
     # ── 统计摘要 ──
     top_n = min(20, len(results))

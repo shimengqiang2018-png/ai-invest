@@ -1,27 +1,22 @@
-#!/usr/bin/env python3
-"""
-动量轮动(RSRS v2.1) + 网格 双策略综合监测
+"""动量轮动、网格趋势和策略审计的结构化综合监测。"""
 
-用法:
-    python3 tools/strategy_monitor.py                          # 全量扫描
-    python3 tools/strategy_monitor.py --momentum-only          # 仅动量
-    python3 tools/strategy_monitor.py --grid-only              # 仅网格
-    python3 tools/strategy_monitor.py --json                   # JSON 输出
-    python3 tools/strategy_monitor.py --audit                  # 量化审计 (IC/IR+压力测试+日频指标)
-
-输出:
-    动量侧: RSRS v2.1 信号排名 + 推荐池状态 + 操作建议
-    网格侧: 持仓 ETF 趋势评分 + 买卖方向 + 风险提示
-    --audit: 日频 MaxDD/Sharpe/VaR + RSRS 因子 IC/IR + 历史情景压力测试
-"""
-
-import json, os, re, subprocess, sys
+import argparse
+import importlib
+import json
+import os
+import sys
 from datetime import datetime
 
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-PROJECT_DIR = os.path.join(SCRIPT_DIR, "..")
+try:
+    from tools.momentum_signal import scan
+    from tools.strategy_models import RunStatus, strict_json_dumps
+except ModuleNotFoundError as exc:  # 支持直接执行 tools/strategy_monitor.py
+    if exc.name not in {"tools", "tools.momentum_signal", "tools.strategy_models"}:
+        raise
+    from momentum_signal import scan
+    from strategy_models import RunStatus, strict_json_dumps
 
-# 动量推荐池 — 基于10年回测 Sharpe 最优
+
 MOMENTUM_POOL = {
     "518880": "黄金ETF",
     "513100": "纳指ETF",
@@ -29,268 +24,341 @@ MOMENTUM_POOL = {
     "159920": "恒生ETF",
 }
 
+DEFAULT_GRID_ETFS = (
+    "512880",
+    "159915",
+    "513180",
+    "512690",
+    "512010",
+    "510300",
+    "159920",
+)
 
-def run(cmd, timeout=30):
-    try:
-        r = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=timeout, cwd=PROJECT_DIR)
-        return r.stdout
-    except Exception as e:
-        return f"ERROR: {e}"
+_UNKNOWN_RISK = {
+    "status": RunStatus.UNKNOWN.value,
+    "as_of": None,
+    "max_dd_pct": None,
+    "sharpe": None,
+    "var_95_loss_pct": None,
+    "ic_10d": None,
+    "ic_20d": None,
+}
 
 
 def load_grid_etfs():
-    f = os.path.join(PROJECT_DIR, "data", "grid_triggers.json")
-    if os.path.exists(f):
-        try:
-            with open(f) as fh:
-                return list(json.load(fh).keys())
-        except: pass
-    return ["512880", "159915", "513180", "512690", "512010", "510300", "159920"]
-
-
-def momentum_scan():
-    """RSRS 动量信号扫描。先取 JSON 解析，再取文本展示。"""
-    codes = ",".join(MOMENTUM_POOL.keys())
-    out = run(f"python3 tools/momentum_signal.py --pool {codes}", timeout=120)
-    json_out = run(f"python3 tools/momentum_signal.py --pool {codes} --json", timeout=120)
-
-    # 从 JSON 解析信号
-    signals = []
+    """Return configured grid ETF codes without invoking another process."""
+    path = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), "..", "data", "grid_triggers.json"
+    )
     try:
-        data = json.loads(json_out)
-        for r in data:
-            if isinstance(r, dict) and "code" in r:
-                signals.append({
-                    "code": r["code"],
-                    "name": r.get("name", ""),
-                    "passed": r.get("pass", False),
-                    "rsrs_score": r.get("rsrs_score", 0),
-                    "signal_strength": r.get("signal_strength", "none"),
-                    "close": r.get("close", 0),
-                })
-    except Exception:
-        # JSON 解析失败，用文本提取
-        for line in out.split("\n"):
-            m = re.search(r'(\d{6})\s+(\S+).*RSRS:\s*([\d.]+)', line)
-            if m:
-                signals.append({"code": m.group(1), "name": m.group(2),
-                               "passed": "不通过" not in line, "rsrs_score": float(m.group(3))})
-            if "买入信号:" in line:
-                m2 = re.search(r'买入信号:\s*(\d{6})\s*(\S+)', line)
-                if m2:
-                    signals.append({"code": m2.group(1), "name": m2.group(2),
-                                   "passed": True, "is_signal": True})
-            if "无买入信号" in line:
-                signals.append({"passed": False, "is_signal": True, "no_signal": True})
-
-    return out, signals
+        with open(path, encoding="utf-8") as handle:
+            data = json.load(handle)
+        if isinstance(data, dict) and data:
+            return list(data)
+    except (OSError, json.JSONDecodeError):
+        pass
+    return list(DEFAULT_GRID_ETFS)
 
 
-def grid_scan():
-    """网格持仓趋势检查。"""
-    etfs = load_grid_etfs()
+def _status_value(status):
+    return status.value if isinstance(status, RunStatus) else status
+
+
+def _unknown_grid(code, message):
+    return {
+        "code": code,
+        "etf": code,
+        "name": code,
+        "status": RunStatus.UNKNOWN.value,
+        "score": None,
+        "bb_width": None,
+        "ma_state": None,
+        "verdict": None,
+        "error": message,
+    }
+
+
+def _legacy_grid_adapter(code, error=None):
+    """Do not infer structured values from the legacy text-only trend command."""
+    return _unknown_grid(code, error or "grid_trading.analyze_trend 尚不可用")
+
+
+def _legacy_audit_adapter(error=None):
+    """Do not infer risk metrics from the legacy text-only audit command."""
+    return {
+        "status": RunStatus.UNKNOWN.value,
+        "error": error or "strategy_audit.run_audit 尚不可用",
+    }
+
+
+def _import_optional_provider(module_names, attribute, fallback):
+    for module_name in module_names:
+        try:
+            module = importlib.import_module(module_name)
+        except ModuleNotFoundError as exc:
+            parent_package = module_name.partition(".")[0]
+            if exc.name in {module_name, parent_package}:
+                continue
+            return None, exc
+        provider = getattr(module, attribute, None)
+        if callable(provider):
+            return provider, None
+        return fallback, None
+    return fallback, None
+
+
+def _default_grid_analyzer():
+    analyzer, error = _import_optional_provider(
+        ("tools.grid_trading", "grid_trading"), "analyze_trend", _legacy_grid_adapter
+    )
+    if error is not None:
+        return lambda code, error=error: _legacy_grid_adapter(code, str(error))
+    return analyzer
+
+
+def _default_audit_provider():
+    provider, error = _import_optional_provider(
+        ("tools.strategy_audit", "strategy_audit"), "run_audit", _legacy_audit_adapter
+    )
+    if error is not None:
+        return lambda error=error: _legacy_audit_adapter(str(error))
+    return provider
+
+
+def _build_momentum(momentum_provider):
+    envelope = momentum_provider(pool=MOMENTUM_POOL)
+    if not isinstance(envelope, dict):
+        raise TypeError("momentum provider 必须返回 dict")
+    status = _status_value(envelope.get("status"))
+    items = envelope.get("items")
+    if not isinstance(items, list):
+        items = []
+    return {
+        "status": status,
+        "as_of": envelope.get("as_of"),
+        "items": items,
+        "errors": envelope.get("errors", []),
+        "selected": envelope.get("selected"),
+        "pool_complete": envelope.get("pool_complete"),
+    }
+
+
+def _build_grid(grid_analyzer, codes):
     results = []
-    for etf in etfs:
-        out = run(f"python3 tools/grid_trading.py trend {etf}", timeout=20)
-        score_m = re.search(r'综合评分:\s*(-?\d+)', out)
-        score = int(score_m.group(1)) if score_m else 99
-        status = ""
-        if "→" in out:
-            status = out.split("→")[-1].strip().split("║")[0].strip()
-
-        # 提取 BB 宽度
-        bb_m = re.search(r'宽度\s+([\d.]+)%', out)
-        bb_width = float(bb_m.group(1)) if bb_m else 0
-
-        # 提取均线状态
-        ma_state = ""
-        if "空头排列" in out: ma_state = "空头"
-        elif "多头排列" in out: ma_state = "多头"
-        elif "均线缠绕" in out: ma_state = "缠绕"
-        elif "MA20 附近" in out: ma_state = "MA20附近"
-
-        results.append({
-            "etf": etf, "score": score, "status": status,
-            "bb_width": bb_width, "ma_state": ma_state,
-        })
+    for code in codes:
+        try:
+            raw = grid_analyzer(code)
+            if not isinstance(raw, dict):
+                raise TypeError("grid analyzer 必须返回 dict")
+            status = _status_value(raw.get("status", RunStatus.UNKNOWN.value))
+            score = raw.get("score") if status == RunStatus.OK.value else None
+            if score is not None and not isinstance(score, (int, float)):
+                raise TypeError("grid score 必须是数值或 None")
+            item = dict(raw)
+            item.update({
+                "code": raw.get("code", raw.get("etf", code)),
+                "etf": raw.get("etf", raw.get("code", code)),
+                "name": raw.get("name", raw.get("code", code)),
+                "status": status,
+                "score": score,
+            })
+            results.append(item)
+        except Exception as exc:  # noqa: BLE001 - provider boundary becomes unknown
+            results.append(_unknown_grid(code, str(exc) or "网格分析失败"))
     return results
 
 
-def print_momentum_report(out, signals):
-    """格式化动量信号输出。"""
-    print("═" * 70)
-    print("  📈 动量轮动 · RSRS 信号")
-    print("═" * 70)
-    print(f"  时间: {datetime.now().strftime('%Y-%m-%d %H:%M')}")
-    print(f"  推荐池: {' + '.join(f'{c}({n})' for c,n in MOMENTUM_POOL.items())}")
-    print()
-
-    # 直接输出 signal.py 的简洁版结果
-    # 提取信号行和操作建议
-    for line in out.split("\n"):
-        s = line.strip()
-        # 跳过头部装饰线
-        if s.startswith("===") or "扫描日期" in s or "核心指标" in s or "过滤:" in s:
-            if "扫描日期" in s or "核心指标" in s:
-                print(f"  {s}")
-            continue
-        # 输出每只 ETF 的评分行和过滤行
-        if any(kw in s for kw in ["RSRS:", "MA20:", "波动率:", "不通过:", "异动:"]):
-            print(f"  {s}")
-        # 输出操作建议段
-        if "📋 操作建议" in s or "买入信号:" in s or "无买入信号" in s or "信号分布" in s:
-            print(f"  {s}")
-        if "操作:" in s and ("仓位" in s or "切换" in s or "持币" in s):
-            print(f"  {s}")
-        if "理由:" in s:
-            print(f"  {s}")
-    print()
+def _group_grid(results):
+    known = [
+        item for item in results
+        if item.get("status") == RunStatus.OK.value and item.get("score") is not None
+    ]
+    return {
+        "stop": [item for item in known if item["score"] <= -4],
+        "caution": [item for item in known if -3 <= item["score"] <= -2],
+        "ok": [item for item in known if item["score"] >= -1],
+    }
 
 
-def print_grid_report(results):
-    """格式化网格状态输出。"""
-    print("═" * 70)
-    print("  📊 网格策略 · 持仓趋势")
-    print("═" * 70)
-    print(f"  时间: {datetime.now().strftime('%Y-%m-%d %H:%M')}")
-    print()
-
-    stop = [r for r in results if r["score"] <= -4]
-    caution = [r for r in results if -3 <= r["score"] <= -2]
-    ok = [r for r in results if r["score"] >= -1]
-
-    if stop:
-        print("  ⛔ 暂停买入 (TrendScore ≤ -4):")
-        for r in stop:
-            print(f"     {r['etf']} 评分{r['score']} BB{r['bb_width']:.1f}% {r['ma_state']} → {r['status'][:40]}")
-        print()
-
-    if caution:
-        print("  🔴 仅保留顺势 (TrendScore -3~-2):")
-        for r in caution:
-            print(f"     {r['etf']} 评分{r['score']} BB{r['bb_width']:.1f}% {r['ma_state']} → {r['status'][:40]}")
-        print()
-
-    if ok:
-        print("  🟡 谨慎/正常 (TrendScore ≥ -1):")
-        for r in ok:
-            print(f"     {r['etf']} 评分{r['score']} BB{r['bb_width']:.1f}% {r['ma_state']} → {r['status'][:40]}")
-        print()
-
-    if not stop and not caution:
-        print("  ✅ 全部正常\n")
-    elif stop:
-        print(f"  ⚠️  {len(stop)}只需暂停买入 | 💡 观察 BB 宽度何时回落\n")
-
-
-def print_advice(momentum_pass, grid_stop):
-    """综合建议。"""
-    print("═" * 70)
-    print("  📋 操作清单")
-    print("═" * 70)
-    print()
-
-    # 动量
-    if momentum_pass:
-        print("  [动量] 🟢 有信号 → 按信号换仓")
-    else:
-        print("  [动量] 🔴 无信号 → 持币或 511880")
-    print()
-
-    # 网格
-    if grid_stop:
-        codes = [r["etf"] for r in grid_stop]
-        print(f"  [网格] ⛔ {', '.join(codes)} → APP 中暂停买入条件单")
-    else:
-        print("  [网格] ✅ 无需操作，条件单自动运行")
-    print()
-
-    # 审计风险指标（静态提示）
-    print("  ── 风险参数 (日频审计) ──")
-    print("  日频 MaxDD:  16.9% (双周采样 11.3% 低估了 5.6pp)")
-    print("  日频 Sharpe: 1.49 | VaR(95%): -1.74%/日")
-    print("  RSRS IC(10日): 0.074 | IC(20日): 0.028 (短周期动量)")
-    print()
-
-    print("  ── 命令速查 ──")
-    print("  每日收盘:   python3 tools/strategy_monitor.py")
-    print("  仅动量:     python3 tools/strategy_monitor.py --momentum-only")
-    print("  仅网格:     python3 tools/strategy_monitor.py --grid-only")
-    print("  动量扫描:   python3 tools/momentum_signal.py")
-    print("  回测验证:   python3 tools/enumerate_pool_backtest.py --pool veteran")
-    print("  量化审计:   python3 tools/strategy_audit.py       (日频指标+IC/IR+压力)")
-    print()
-
-
-def run_audit():
-    """运行量化审计，输出日频指标摘要。"""
-    import subprocess
-    print("\n  ⏳ 运行量化审计 (IC/IR + 压力测试 + 日频指标)...")
-    result = subprocess.run(
-        ["python3", os.path.join(SCRIPT_DIR, "strategy_audit.py")],
-        capture_output=True, text=True, timeout=300, cwd=PROJECT_DIR
-    )
-    print(result.stdout)
-    if result.stderr:
-        print(result.stderr)
-
-
-def main():
-    import argparse
-    parser = argparse.ArgumentParser(description="双策略综合监测 v2.0")
-    parser.add_argument("--momentum-only", action="store_true")
-    parser.add_argument("--grid-only", action="store_true")
-    parser.add_argument("--json", action="store_true")
-    parser.add_argument("--audit", action="store_true", help="运行量化审计 (日频指标+IC/IR+压力测试)")
-    args = parser.parse_args()
-
-    if args.audit:
-        run_audit()
-        return
-
-    print()
-    print("╔" + "═" * 68 + "╗")
-    print("║  动量轮动(RSRS v2.1) + 网格趋势 双策略监测" + " " * 23 + "║")
-    print("╚" + "═" * 68 + "╝")
-    print()
-
-    # 采集数据
-    momentum_out, momentum_signals = "", []
-    grid_results = []
-    if not args.grid_only:
-        momentum_out, momentum_signals = momentum_scan()
-    if not args.momentum_only:
-        grid_results = grid_scan()
-
-    # 计算派生指标
-    has_momentum_signal = any(s.get("passed") for s in momentum_signals if s.get("code"))
-    has_buy_signal = has_momentum_signal  # 有任一通过 = 有买入信号
-    grid_stop = [r for r in grid_results if r["score"] <= -4]
-
-    if args.json:
-        result = {
-            "time": datetime.now().isoformat(),
-            "momentum": {
-                "has_signal": has_momentum_signal if not args.grid_only else None,
-                "buy_signal": has_buy_signal if not args.grid_only else None,
-                "signals": [{"code": s["code"], "name": s["name"], "passed": s["passed"],
-                            "rsrs": s.get("rsrs_score", 0)}
-                           for s in momentum_signals if s.get("code")],
-            },
-            "grid": [{"etf": r["etf"], "score": r["score"], "bb_width": r["bb_width"],
-                      "ma_state": r["ma_state"]} for r in grid_results],
-            "grid_stop_list": [r["etf"] for r in grid_stop],
+def _build_risk(audit_provider):
+    try:
+        audit = audit_provider()
+        if not isinstance(audit, dict):
+            raise TypeError("audit provider 必须返回 dict")
+        if _status_value(audit.get("status")) == RunStatus.UNKNOWN.value:
+            raise ValueError(audit.get("error") or "审计结果不可用")
+        period = audit["period"]
+        daily = audit["daily_metrics"]
+        ic_ir = audit["ic_ir"]
+        return {
+            "status": RunStatus.OK.value,
+            "as_of": period["end"],
+            "max_dd_pct": daily["max_dd_pct"],
+            "sharpe": daily["sharpe"],
+            "var_95_loss_pct": daily.get("var_95_daily_pct", daily.get("var_95_loss_pct")),
+            "ic_10d": ic_ir["ic_10d"],
+            "ic_20d": ic_ir["ic_20d"],
         }
-        print(json.dumps(result, indent=2, ensure_ascii=False))
-        return
+    except Exception as exc:  # noqa: BLE001 - provider boundary becomes unknown
+        return {**_UNKNOWN_RISK, "error": str(exc) or "审计加载失败"}
 
-    # 格式化输出
-    if not args.grid_only:
-        print_momentum_report(momentum_out, momentum_signals)
-    if not args.momentum_only:
-        print_grid_report(grid_results)
-    print_advice(has_buy_signal, grid_stop)
+
+def _momentum_action(momentum):
+    status = momentum.get("status")
+    if status == RunStatus.OK.value and momentum.get("selected"):
+        selected = momentum["selected"]
+        return f"按信号换仓至 {selected.get('code')} {selected.get('name', '')}".strip()
+    if status == RunStatus.NO_SIGNAL.value:
+        return "持币或切换至 511880 银华日利"
+    return None
+
+
+def _grid_action(groups):
+    stopped = [item.get("code") for item in groups["stop"]]
+    if stopped:
+        return f"暂停 {', '.join(stopped)} 的买入条件单"
+    if any(groups.values()):
+        return "无需操作，条件单按趋势评分运行"
+    return None
+
+
+def build_monitor_report(
+    *,
+    momentum_provider=scan,
+    grid_analyzer=None,
+    audit_provider=None,
+    include_momentum=True,
+    include_grid=True,
+    include_audit=True,
+):
+    """Build one report from direct, structured Python provider results."""
+    if include_momentum:
+        try:
+            momentum = _build_momentum(momentum_provider)
+        except Exception as exc:  # noqa: BLE001 - provider boundary becomes unknown
+            momentum = {
+                "status": RunStatus.UNKNOWN.value,
+                "as_of": None,
+                "items": [],
+                "errors": [{"stage": "monitor", "message": str(exc)}],
+                "selected": None,
+                "pool_complete": False,
+            }
+    else:
+        momentum = None
+
+    if include_grid:
+        analyzer = grid_analyzer or _default_grid_analyzer()
+        grid = _build_grid(analyzer, load_grid_etfs())
+    else:
+        grid = []
+    grid_groups = _group_grid(grid)
+
+    if include_audit:
+        risk = _build_risk(audit_provider or _default_audit_provider())
+    else:
+        risk = None
+
+    return {
+        "time": datetime.now().astimezone().isoformat(),
+        "momentum": momentum,
+        "grid": grid,
+        "grid_groups": grid_groups,
+        "risk": risk,
+        "advice": {
+            "momentum_action": _momentum_action(momentum) if momentum else None,
+            "grid_action": _grid_action(grid_groups),
+        },
+    }
+
+
+def _format_optional(value, suffix=""):
+    return "未知" if value is None else f"{value}{suffix}"
+
+
+def render_human_report(report):
+    """Render a report without invoking providers or mutating report data."""
+    lines = [
+        "动量轮动(RSRS v3.0) + 网格趋势 双策略监测",
+        f"时间: {report['time']}",
+    ]
+
+    momentum = report.get("momentum")
+    if momentum is not None:
+        lines.extend(["", "动量轮动 · RSRS 信号", f"状态: {momentum.get('status')}"])
+        for item in momentum.get("items", []):
+            lines.append(f"{item.get('code', '-')} {item.get('name', '')}".rstrip())
+            if item.get("error"):
+                lines.append(f"  数据错误: {item['error']}")
+            else:
+                lines.append(
+                    f"  RSRS: {_format_optional(item.get('rsrs_score'))} | "
+                    f"信号: {item.get('signal_strength', 'none')}"
+                )
+        strengths = [item.get("signal_strength") for item in momentum.get("items", [])]
+        lines.append(
+            "信号分布: "
+            f"强信号: {strengths.count('strong')} | "
+            f"中等: {strengths.count('medium')} | "
+            f"无信号: {strengths.count('none')}"
+        )
+
+    grid = report.get("grid", [])
+    if grid:
+        lines.extend(["", "网格策略 · 持仓趋势"])
+        for item in grid:
+            score = _format_optional(item.get("score"))
+            lines.append(
+                f"{item.get('code', item.get('etf', '-'))} {item.get('name', '')} "
+                f"评分: {score} 状态: {item.get('status', 'unknown')}"
+            )
+
+    risk = report.get("risk")
+    if risk is not None:
+        lines.extend(["", "风险参数 (日频审计)", f"状态: {risk.get('status')}"])
+        if risk.get("status") == RunStatus.OK.value:
+            lines.append(
+                f"截至: {risk['as_of']} | MaxDD: {risk['max_dd_pct']}% | "
+                f"Sharpe: {risk['sharpe']} | VaR(95%): {risk['var_95_loss_pct']}%"
+            )
+            lines.append(f"RSRS IC(10日): {risk['ic_10d']} | IC(20日): {risk['ic_20d']}")
+        else:
+            lines.append("审计数据不可用，未使用静态风险值")
+
+    advice = report.get("advice", {})
+    lines.extend(["", "操作清单"])
+    lines.append(f"动量: {advice.get('momentum_action') or '无正式动作'}")
+    lines.append(f"网格: {advice.get('grid_action') or '无正式动作'}")
+    return "\n".join(lines) + "\n"
+
+
+def _parser():
+    parser = argparse.ArgumentParser(description="双策略综合监测 v3.0")
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--momentum-only", action="store_true")
+    mode.add_argument("--grid-only", action="store_true")
+    mode.add_argument("--audit", action="store_true", help="仅运行结构化量化审计")
+    parser.add_argument("--json", action="store_true", help="输出严格 JSON")
+    return parser
+
+
+def main(argv=None):
+    args = _parser().parse_args(argv)
+    try:
+        report = build_monitor_report(
+            include_momentum=not args.grid_only and not args.audit,
+            include_grid=not args.momentum_only and not args.audit,
+            include_audit=not args.momentum_only and not args.grid_only,
+        )
+        if args.json:
+            print(strict_json_dumps(report))
+        else:
+            print(render_human_report(report), end="")
+        return 0
+    except KeyboardInterrupt:
+        print("监测已中断", file=sys.stderr)
+        return 130
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

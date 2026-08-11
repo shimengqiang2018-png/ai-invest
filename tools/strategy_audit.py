@@ -367,6 +367,31 @@ def audit_backtest_result(result, pool):
     }
 
 
+def run_audit():
+    """便捷包装：运行回测并生成审计指标，供 strategy_monitor 调用。
+
+    无参数，内部使用默认 POOL 和参数运行回测，再消费回测结果生成审计。
+    返回包含 status、period、daily_metrics、ic_ir 等字段的字典。
+    如果回测失败，返回 UNKNOWN 状态。
+    """
+    try:
+        result = run_backtest(
+            pool=POOL, start_date="2016-01-01", end_date=None,
+            freq="biweekly", momentum_period=25,
+            include_bench=False, quiet=True,
+        )
+        audit = audit_backtest_result(result, POOL)
+        return {
+            "status": "ok",
+            **audit,
+        }
+    except Exception as exc:
+        return {
+            "status": "unknown",
+            "error": str(exc) or "审计执行失败",
+        }
+
+
 def main():
     import argparse
     parser = argparse.ArgumentParser()
@@ -383,7 +408,7 @@ def main():
     print("[1/4] 运行回测并冻结数据快照...")
     result = run_backtest(
         pool=POOL, start_date="2016-01-01", end_date=args.end,
-        freq="biweekly", momentum_period=20,
+        freq="biweekly", momentum_period=25,
         include_bench=False, quiet=True,
     )
     audit = audit_backtest_result(result, POOL)

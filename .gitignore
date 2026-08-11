@@ -31,5 +31,15 @@ reports/portfolio-latest.md
 .workbuddy
 .workbuddy-ai
 data/cache
+momentum-dashboard/cache
+momentum-dashboard/server.log
+momentum-dashboard/dashboard.db
+data/positions_latest.bak-*.json
+data/ai_parse_history.json
 .pytest_cache
+__pycache__/
 /assets
+.venv
+.ruff_cache
+.env
+momentum-dashboard/server-*.log

@@ -17,19 +17,24 @@ ETF 动量轮动 — 信号扫描工具 v2.0
     python3 tools/momentum_signal.py --entry 159915 3.45 # 检查止损线
 """
 
-import argparse, json, math, os, subprocess, sys, time
-from datetime import datetime
+import argparse, json, os, subprocess, sys, time
+from datetime import datetime, time as datetime_time
+from zoneinfo import ZoneInfo
 
 try:
     from tools.etf_market_data import load_etf_series
     from tools.momentum_core import (
         MomentumConfig,
+        STOP_LOSS_PCT,
         evaluate_momentum_signal,
         rank_momentum_signals,
+        select_rotation_target,
     )
+    from tools.strategy_models import RunStatus, StrategyError, strict_json_dumps
 except ModuleNotFoundError:  # 支持直接执行 tools/momentum_signal.py
     from etf_market_data import load_etf_series
-    from momentum_core import MomentumConfig, evaluate_momentum_signal, rank_momentum_signals
+    from momentum_core import MomentumConfig, STOP_LOSS_PCT, evaluate_momentum_signal, rank_momentum_signals, select_rotation_target
+    from strategy_models import RunStatus, StrategyError, strict_json_dumps
 
 _TIMEOUT = 15
 _CACHE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "data", "cache")
@@ -57,11 +62,18 @@ POOL = {
 # 防御资产: 所有标的都不通过时切换至此
 DEFENSIVE_CODE = "511880"
 
-# 止损参数
-STOP_LOSS_PCT = 0.08  # 绝对止损 8%
+SHANGHAI = ZoneInfo("Asia/Shanghai")
 
-# 成交量异动阈值
-VOLUME_SURGE_RATIO = 2.5
+
+def determine_market_closed(last_bar_date: str, *, now: datetime | None = None) -> bool:
+    """Return whether a Shanghai daily bar is finalized for formal signals."""
+    current = (now or datetime.now(SHANGHAI)).astimezone(SHANGHAI)
+    current_date = current.date().isoformat()
+    if last_bar_date < current_date:
+        return True
+    if last_bar_date > current_date:
+        return False
+    return current.weekday() < 5 and current.time() >= datetime_time(15, 5)
 
 
 def _qq_code(code):
@@ -116,181 +128,242 @@ def fetch_kline(code, count=300):
     return result
 
 
-def calc_ma(closes, period):
-    if len(closes) < period: return None
-    return sum(closes[-period:]) / period
+def scan(
+    pool,
+    momentum_period=25,
+    *,
+    ma_period=20,
+    market_closed=None,
+    now=None,
+    series_by_code=None,
+    config=None,
+    holding=None,
+    switch_buffer=1.0,
+):
+    """Scan one complete ETF cross-section and return a structured envelope."""
+    config = config or MomentumConfig(
+        rsrs_period=momentum_period, ma_period=ma_period
+    )
+    candidates = {
+        code: name for code, name in pool.items() if code != DEFENSIVE_CODE
+    }
+    loaded = {}
+    errors = []
 
-
-def calc_rsrs(klines, period=20):
-    """
-    RSRS 动量: 年化斜率 × R²（拟合优度）
-
-    对近 period 日的 log(收盘价) 做加权线性回归:
-      - 权重: 近期更高（1 → 2 线性递增）
-      - 斜率: 年化处理 (×252)
-      - R²: 衡量价格沿趋势线的稳定程度
-
-    返回: (rsrs_score, slope_annualized, r_squared)
-    """
-    if len(klines) < period + 1: return (0, 0, 0)
-
-    window = klines[-(period + 1):]
-    log_prices = [math.log(k["close"]) for k in window if k["close"] > 0]
-    if len(log_prices) < period // 2: return (0, 0, 0)
-
-    n = len(log_prices)
-    x = list(range(n))
-    # 线性递增权重: 1 → 2
-    weights = [1 + i / (n - 1) for i in range(n)] if n > 1 else [1] * n
-
-    wx = sum(w * xi for w, xi in zip(weights, x))
-    wy = sum(w * yi for w, yi in zip(weights, log_prices))
-    wxx = sum(w * xi * xi for w, xi in zip(weights, x))
-    wxy = sum(w * xi * yi for w, xi, yi in zip(weights, x, log_prices))
-    w_sum = sum(weights)
-    wyy = sum(w * yi * yi for w, yi in zip(weights, log_prices))
-
-    denominator = w_sum * wxx - wx * wx
-    if abs(denominator) < 1e-10: return (0, 0, 0)
-
-    slope = (w_sum * wxy - wx * wy) / denominator
-
-    # R²
-    y_mean = wy / w_sum
-    ss_total = wyy - 2 * y_mean * wy + w_sum * y_mean * y_mean
-    ss_error = 0
-    intercept = (wy - slope * wx) / w_sum
-    for xi, yi, wi in zip(x, log_prices, weights):
-        pred = slope * xi + intercept
-        ss_error += wi * (yi - pred) ** 2
-    r_squared = max(0, 1 - ss_error / ss_total) if ss_total > 1e-10 else 0
-
-    # 年化斜率（交易日 ×252）
-    slope_annual = slope * 252
-
-    # RSRS 得分 = 年化斜率 × R²（截断下限=0 防负分，无上限截断，保留连续排名能力）
-    # 审查修正: 原 cap=5 导致 91% 买入信号得分并列 5.0，排名退化为字典序
-    # 提高上限至 50，确保不同 ETF 之间有足够的区分度
-    rsrs = max(0, min(50, slope_annual * r_squared * 100))
-
-    return (round(rsrs, 2), round(slope_annual * 100, 2), round(r_squared, 4))
-
-
-def calc_atr(klines, period=14):
-    """ATR 波动率（百分比）"""
-    if len(klines) < period + 1: return 0
-    window = klines[-(period + 1):]
-    trs = []
-    for i in range(1, len(window)):
-        h, l, pc = window[i]["high"], window[i]["low"], window[i-1]["close"]
-        tr = max(h - l, abs(h - pc), abs(l - pc))
-        trs.append(tr)
-    if not trs: return 0
-    atr = sum(trs) / len(trs)
-    current = window[-1]["close"]
-    return atr / current if current > 0 else 0
-
-
-def estimate_today_volume(klines, today_minutes_passed=240):
-    """
-    估算今日全天成交量。
-    基于交易时间进度推估: 预估量 = 当前量 × (240 / 已过分钟)
-    """
-    if len(klines) < 2: return None
-    today = klines[-1]
-    vol = today.get("volume", 0)
-    if vol <= 0: return None
-
-    # 如果已经是全天数据（前一日），直接返回
-    yesterday = klines[-2]
-    if today.get("date") == yesterday.get("date"): return vol
-
-    progress = max(0.1, min(1.0, today_minutes_passed / 240))
-    return vol / progress
-
-
-def calc_volume_ratio(klines):
-    """当日预估量 / 5日均量"""
-    if len(klines) < 7: return 1.0
-    # 近5个完整交易日（排除今天）
-    vols = [k["volume"] for k in klines[-6:-1]]
-    avg_vol = sum(vols) / 5 if vols else 1
-    # 今天已成交量
-    today_vol = klines[-1].get("volume", 0)
-    # 简化处理: 用 14:00 左右的数据，假设已完成 90% 交易
-    estimated = today_vol / 0.9 if today_vol > 0 else None
-    if estimated and avg_vol > 0:
-        return estimated / avg_vol
-    return 1.0
-
-
-def scan(pool, momentum_period=20, *, config=None, market_closed=True):
-    """扫描全部 ETF；未完成的盘中 bar 只返回 provisional 结果。"""
-    config = config or MomentumConfig(rsrs_period=momentum_period)
-    results = []
-    snapshots = []
-    for code, name in pool.items():
-        if code == DEFENSIVE_CODE:
-            continue
+    for code in candidates:
         try:
-            series = load_etf_series(code, count=max(300, config.warmup_days + 1))
-            bars = tuple(series.bars)
+            if series_by_code is not None:
+                series = series_by_code[code]
+            else:
+                series = load_etf_series(
+                    code, count=max(300, config.warmup_days + 1)
+                )
+            if not tuple(series.bars):
+                raise ValueError("数据不足")
+            loaded[code] = series
         except Exception as exc:
-            results.append({"code": code, "name": name, "error": str(exc), "pass": False,
-                            "formal": False, "provisional": not market_closed})
+            errors.append(StrategyError(
+                code=code,
+                stage="load",
+                source=None,
+                message=str(exc) or "数据加载失败",
+            ))
+
+    end_dates = {
+        series.manifest.end_date for series in loaded.values()
+    }
+    same_end_date = len(end_dates) <= 1
+    as_of = next(iter(end_dates)) if len(end_dates) == 1 else None
+    if not same_end_date:
+        errors.append(StrategyError(
+            code=None,
+            stage="cross_section",
+            source=None,
+            message="候选池 manifest.end_date 不一致",
+        ))
+
+    pool_complete = len(loaded) == len(candidates) and same_end_date
+    closed = (
+        bool(market_closed)
+        if market_closed is not None
+        else (
+            determine_market_closed(as_of, now=now)
+            if as_of is not None
+            else None
+        )
+    )
+    formal_scan = pool_complete and closed is True
+    snapshots = []
+    items = []
+
+    for code, name in candidates.items():
+        series = loaded.get(code)
+        if series is None:
+            error = next(error for error in errors if error.code == code)
+            items.append({
+                "code": code,
+                "name": name,
+                "error": error.message,
+                "pass": False,
+                "formal": False,
+                "provisional": None if closed is None else not closed,
+                "signal_strength": "none",
+            })
             continue
-        if not bars:
-            results.append({"code": code, "name": name, "error": "数据不足", "pass": False,
-                            "formal": False, "provisional": not market_closed})
+
+        bars = tuple(series.bars)
+        item_closed = (
+            bool(market_closed)
+            if market_closed is not None
+            else determine_market_closed(series.manifest.end_date, now=now)
+        )
+        try:
+            snapshot = evaluate_momentum_signal(
+                code, bars, len(bars) - 1, config
+            )
+        except Exception as exc:
+            errors.append(StrategyError(
+                code=code,
+                stage="evaluate",
+                source=getattr(series.manifest, "source", None),
+                message=str(exc) or "信号计算失败",
+            ))
+            pool_complete = False
+            formal_scan = False
+            items.append({
+                "code": code,
+                "name": name,
+                "date": getattr(series.manifest, "end_date", None),
+                "error": str(exc),
+                "pass": False,
+                "formal": False,
+                "provisional": not item_closed,
+                "signal_strength": "none",
+            })
             continue
-        snapshot = evaluate_momentum_signal(code, bars, len(bars) - 1, config)
+
         snapshots.append(snapshot)
         metrics = dict(snapshot.metrics)
-        formal = bool(metrics["formal"] and market_closed)
-        passed = bool(snapshot.passed and market_closed)
+        if not metrics["formal"]:
+            errors.append(StrategyError(
+                code=code,
+                stage="history",
+                source=getattr(series.manifest, "source", None),
+                message=(
+                    f"严格历史交易日不足: {metrics['strict_history_days']}"
+                    f" < {config.warmup_days}"
+                ),
+            ))
+            pool_complete = False
+            formal_scan = False
+        item_formal = bool(metrics["formal"] and formal_scan)
+        passed = bool(snapshot.passed and formal_scan)
         closes = [float(bar["close"]) for bar in bars]
-        results.append({
-            "code": code, "name": name, "date": snapshot.date,
+        volume_ratio = metrics["volume_ratio"]
+        items.append({
+            "code": code,
+            "name": name,
+            "date": snapshot.date,
             "close": round(metrics["close"], 4),
             "raw_rsrs_score": snapshot.raw_rsrs_score,
             "rsrs_score": metrics["display_rsrs_score"],
             "slope_annual_pct": snapshot.slope_annual_pct,
             "r_squared": snapshot.r_squared,
-            "ma20": round(metrics["ma20"], 4) if metrics["ma20"] is not None else None,
+            "ma": round(metrics["ma"], 4) if metrics["ma"] is not None else None,
+            "ma_period": config.ma_period,
             "ma60": round(metrics["ma60"], 4) if metrics["ma60"] is not None else None,
-            "above_ma20": metrics["above_ma"],
+            "above_ma": metrics["above_ma"],
             "above_ma60": metrics["ma60"] is not None and metrics["close"] > metrics["ma60"],
-            "golden_cross": metrics["golden_cross"],
+            "golden_cross": bool(metrics["golden_cross"] and formal_scan),
             "vol_20d": round(metrics["current_volatility"] * 100, 2),
             "vol_median": round(metrics["historical_volatility_median"] * 100, 2),
             "vol_ok": metrics["volatility_ok"],
-            "vol_ratio": round(metrics["volume_ratio"], 2),
+            "vol_ratio": round(volume_ratio, 2) if volume_ratio is not None else None,
             "volume_surge": not metrics["volume_ok"],
+            "day_down": metrics.get("day_down", False),
             "rsi": round(metrics["rsi"], 1),
             "rsi_overbought": not metrics["rsi_ok"],
             "pct_5d": round((closes[-1] / closes[-6] - 1) * 100, 2) if len(closes) >= 6 else 0,
             "pct_20d": round((closes[-1] / closes[-21] - 1) * 100, 2) if len(closes) >= 21 else 0,
             "metrics": metrics,
             "pass": passed,
-            "formal": formal,
-            "provisional": not market_closed,
-            "signal_strength": snapshot.signal_strength if market_closed else "none",
+            "formal": item_formal,
+            "provisional": not item_closed,
+            "signal_strength": snapshot.signal_strength if formal_scan else "none",
         })
-    results.sort(key=lambda item: (-item.get("raw_rsrs_score", float("-inf")),
-                                   -item.get("r_squared", float("-inf")), item["code"]))
-    return results
+
+    selected = None
+    if pool_complete and formal_scan:
+        items.sort(key=lambda item: (
+            -item.get("raw_rsrs_score", float("-inf")),
+            -item.get("r_squared", float("-inf")),
+            item["code"],
+        ))
+        ranked = rank_momentum_signals(snapshots)
+        if ranked is not None:
+            selected = next(item for item in items if item["code"] == ranked.code)
+    elif not formal_scan:
+        for item in items:
+            item["pass"] = False
+            item["formal"] = False
+            item["signal_strength"] = "none"
+            if "golden_cross" in item:
+                item["golden_cross"] = False
+
+    # 迟滞轮动决策（仅在正式扫描时计算）
+    rotation = None
+    if pool_complete and formal_scan:
+        rotation = select_rotation_target(holding, snapshots, switch_buffer)
+    elif not formal_scan:
+        rotation = None  # 非正式扫描不产生操作建议
+
+    if not pool_complete:
+        status = RunStatus.UNKNOWN
+        selected = None
+    elif closed is not True:
+        status = RunStatus.PROVISIONAL
+    elif selected is None:
+        status = RunStatus.NO_SIGNAL
+    else:
+        status = RunStatus.OK
+
+    return {
+        "status": status,
+        "as_of": as_of,
+        "items": items,
+        "errors": errors,
+        "selected": selected,
+        "rotation": rotation,
+        "pool_complete": pool_complete,
+    }
 
 
 def check_stop_loss(entry_code, entry_price, current_price=None):
-    """检查持仓是否触发止损线。"""
+    """检查持仓是否触发止损线。
+
+    优先使用 load_etf_series（东方财富+腾讯交叉验证），不可用时降级到
+    腾讯 API (fetch_kline)。同时检查最后一条 bar 是否为盘中未完成日 K，
+    若是则标注 (盘中实时价，非正式信号)。
+    """
+    last_bar_date = None
     if current_price is None:
-        klines = fetch_kline(entry_code, count=5)
-        if not klines: return None
-        current_price = klines[-1]["close"]
+        # 优先使用 load_etf_series（东方财富+腾讯交叉验证）
+        try:
+            series = load_etf_series(entry_code, count=5)
+            if series and series.bars:
+                current_price = series.bars[-1]["close"]
+                last_bar_date = series.manifest.end_date
+        except Exception:
+            # 降级到腾讯 API (fetch_kline)
+            klines = fetch_kline(entry_code, count=5)
+            if not klines:
+                return None
+            current_price = klines[-1]["close"]
+            last_bar_date = klines[-1]["date"]
 
     loss_pct = (current_price - entry_price) / entry_price
     triggered = loss_pct <= -STOP_LOSS_PCT
-    return {
+    result = {
         "entry_price": entry_price,
         "current_price": current_price,
         "loss_pct": round(loss_pct * 100, 2),
@@ -298,15 +371,29 @@ def check_stop_loss(entry_code, entry_price, current_price=None):
         "triggered": triggered,
     }
 
+    # 盘中检查: 如果最后 bar 日期为当日且尚未收盘，标注盘中价格
+    if last_bar_date is not None:
+        market_closed = determine_market_closed(last_bar_date)
+        if not market_closed:
+            result["intraday"] = True
+            result["intraday_note"] = "(盘中实时价，非正式信号)"
+
+    return result
+
 
 def main():
     parser = argparse.ArgumentParser(description="ETF动量轮动信号扫描 v2.0")
     parser.add_argument("--pool", default="518880,513100,159915,510300,512880,512690,512010,588000,510500,513180",
                         help="ETF池（逗号分隔）")
-    parser.add_argument("--momentum", type=int, default=20, help="RSRS 计算周期（默认20日）")
+    parser.add_argument("--momentum", type=int, default=25, help="RSRS 计算周期（默认25日，v3.0 规范）")
+    parser.add_argument("--ma-period", type=int, default=20, help="均线周期（默认20日）")
     parser.add_argument("--json", action="store_true", help="JSON输出")
     parser.add_argument("--entry", nargs=2, metavar=("CODE", "PRICE"),
                         help="检查止损: --entry 159915 3.45")
+    parser.add_argument("--holding", default=None,
+                        help="当前持仓代码（启用迟滞决策）")
+    parser.add_argument("--switch-buffer", type=float, default=1.0,
+                        help="换仓迟滞系数（默认 1.0=无迟滞，≥1.0）")
     args = parser.parse_args()
 
     # 止损检查模式
@@ -314,13 +401,20 @@ def main():
         code, price = args.entry[0], float(args.entry[1])
         name = POOL.get(code, code)
         result = check_stop_loss(code, price)
+        if args.json:
+            print(strict_json_dumps(result))
+            return
         if result:
             print(f"  {name} ({code})")
             print(f"  入场价: {result['entry_price']:.4f}")
             print(f"  当前价: {result['current_price']:.4f}")
+            if result.get("intraday_note"):
+                print(f"  ⚠️  {result['intraday_note']}")
             print(f"  浮动盈亏: {result['loss_pct']:+.2f}%")
             print(f"  止损线 (8%): {result['stop_loss_line']:.4f}")
             status = "🔴 触发止损！" if result['triggered'] else "🟢 未触发"
+            if result.get("intraday"):
+                status += " (盘中非正式)"
             print(f"  状态: {status}")
         return
 
@@ -328,20 +422,23 @@ def main():
     codes = [c.strip() for c in args.pool.split(",") if c.strip()]
     pool = {c: POOL.get(c, c) for c in codes}
 
-    results = scan(pool, args.momentum)
+    result = scan(pool, args.momentum, ma_period=args.ma_period,
+                  holding=args.holding, switch_buffer=args.switch_buffer)
 
     if args.json:
-        print(json.dumps(results, indent=2, ensure_ascii=False, default=str))
+        print(strict_json_dumps(result))
         return
 
     # 格式化输出
-    mp = args.momentum
-    date_str = results[0]["date"] if results else datetime.now().strftime("%Y-%m-%d")
+    results = result["items"]
+    ma_label = f"MA{args.ma_period}"
+    ranked_output = result["status"] in (RunStatus.OK, RunStatus.NO_SIGNAL)
+    date_str = result["as_of"] or datetime.now(SHANGHAI).strftime("%Y-%m-%d")
     print("=" * 75)
     print(f"  ETF 动量轮动 · RSRS 信号扫描 v2.0")
     print(f"  扫描日期: {date_str}  |  候选池: {len(results)} 只 ETF")
     print(f"  核心指标: RSRS = 年化斜率 × R²（趋势强度 × 趋势质量）")
-    print(f"  过滤: 收盘>MA20 | 波动<历史中位×1.5 | 成交量无异常 | RSI<80")
+    print(f"  过滤: 收盘>{ma_label} | 波动<历史中位×1.5 | 下行放量(distribution) | RSI<80")
     print("=" * 75)
 
     # 信号分级统计
@@ -351,15 +448,16 @@ def main():
 
     # 详细输出
     for rank, r in enumerate(results, 1):
+        item_prefix = f"{rank:>2}." if ranked_output else " - "
         if r.get("error"):
-            print(f"\n  {rank:>2}. ❌ {r['code']} {r['name']}  ⚠️ {r['error']}")
+            print(f"\n  {item_prefix} ❌ {r['code']} {r['name']}  ⚠️ {r['error']}")
             continue
 
         strength_icon = {
             "strong": "🟢", "medium": "🟡", "none": "⚪"
         }.get(r["signal_strength"], "⚪")
 
-        print(f"\n  {rank:>2}. {strength_icon} {r['code']} {r['name']}")
+        print(f"\n  {item_prefix} {strength_icon} {r['code']} {r['name']}")
 
         # RSRS 核心行
         print(f"     RSRS: {r['rsrs_score']:.2f}  "
@@ -367,15 +465,28 @@ def main():
               f"20日涨幅 {r['pct_20d']:+.2f}%  |  5日 {r['pct_5d']:+.2f}%")
 
         # 过滤条件
-        ma_status = "✅" if r["above_ma20"] else "❌"
+        ma_status = "✅" if r["above_ma"] else "❌"
         cross = " 双多头" if r.get("golden_cross") else ""
-        print(f"     MA20: {r['ma20']} {ma_status}{cross}  |  "
+        print(f"     {ma_label}: {r['ma']} {ma_status}{cross}  |  "
               f"MA60: {r['ma60']} {'✅' if r.get('above_ma60') else '—'}")
 
         vol_status = "✅" if r["vol_ok"] else "❌ 过热"
         print(f"     波动率: {r['vol_20d']}%  |  历史中位: {r['vol_median']}%  |  {vol_status}")
 
-        surge_warn = f" 🔴 放量{r['vol_ratio']:.1f}倍" if r["volume_surge"] else ""
+        surge_warn = ""
+        if r["volume_surge"]:
+            if r.get("day_down"):
+                surge_warn = (
+                    f" 🔴 放量{r['vol_ratio']:.1f}倍+下行(distribution)"
+                    if r["vol_ratio"] is not None
+                    else " 🔴 放量+下行(distribution)"
+                )
+            else:
+                surge_warn = (
+                    f" 🟡 放量{r['vol_ratio']:.1f}倍(上行,不作为过滤条件)"
+                    if r["vol_ratio"] is not None
+                    else " 🟡 放量(上行)"
+                )
         rsi_warn = f" 🔴 RSI={r['rsi']}" if r["rsi_overbought"] else ""
         extra = (surge_warn + rsi_warn).strip()
         if extra:
@@ -383,11 +494,18 @@ def main():
 
         if not r["pass"]:
             reasons = []
-            if not r.get("above_ma20"): reasons.append("收盘<MA20")
+            if not r.get("above_ma"): reasons.append(f"收盘<{ma_label}")
             if not r.get("vol_ok"): reasons.append("波动率过热")
-            if r.get("volume_surge"): reasons.append("成交量异常放量")
+            if r.get("volume_surge") and r.get("day_down"): reasons.append("下行放量(distribution)")
             if r.get("rsi_overbought"): reasons.append("RSI超买")
             if r.get("rsrs_score", 0) <= 0: reasons.append("RSRS动量≤0")
+            if r.get("error"):
+                reasons.append(r["error"])
+            if not reasons:
+                if r.get("provisional"):
+                    reasons.append("盘中非正式扫描")
+                else:
+                    reasons.append("候选池数据不完整或历史不足")
             print(f"     🔴 不通过: {', '.join(reasons)}")
 
     # ===== 操作建议 =====
@@ -396,22 +514,38 @@ def main():
     print(f"{'='*75}")
 
     pass_list = [r for r in results if r["pass"]]
-    best = pass_list[0] if pass_list else None
+    best = result["selected"]
 
-    if best:
+    if result["status"] in (RunStatus.UNKNOWN, RunStatus.PROVISIONAL):
+        status_label = (
+            "候选池数据不完整"
+            if result["status"] == RunStatus.UNKNOWN
+            else "当日行情尚未正式收盘"
+        )
+        print(f"  ⚪ 无法形成正式结论: {status_label}")
+    elif best:
         name = best["name"]
         code = best["code"]
         strength = best["signal_strength"]
 
         action = "全仓买入"
         detail = ("双均线多头 + RSRS 高分" if strength == "strong"
-                  else "站上 MA20 且满足全部五项条件")
+                  else f"站上 {ma_label} 且满足全部五项条件")
 
         print(f"  🟢 买入信号: {code} {name}")
         print(f"     RSRS 得分: {best['rsrs_score']:.2f}/5  |  信号强度: {strength}")
         print(f"     当前价: {best['close']}  |  止损线: {round(best['close'] * (1 - STOP_LOSS_PCT), 4)}")
         print(f"     操作: {action}")
         print(f"     理由: {detail}")
+
+        # 迟滞决策
+        rotation = result.get("rotation")
+        if rotation:
+            rot_label = {
+                "buy": "买入", "switch": "换仓", "hold": "持有不动",
+                "liquidate": "清仓", "none": "无操作",
+            }.get(rotation["action"], rotation["action"])
+            print(f"     迟滞决策: {rot_label} — {rotation['reason']}")
 
         # 展示第二名对比
         second = pass_list[1] if len(pass_list) > 1 else None
@@ -424,12 +558,12 @@ def main():
 
         # 最接近通过的标的
         near = [r for r in results
-                if r.get("above_ma20") and r.get("vol_ok") and r.get("rsrs_score", 0) > 0
+                if r.get("above_ma") and r.get("vol_ok") and r.get("rsrs_score", 0) > 0
                 and (r.get("volume_surge") or r.get("rsi_overbought"))]
         near2 = [r for r in results
-                 if r.get("above_ma20") and not r.get("vol_ok") and r.get("rsrs_score", 0) > 0]
+                 if r.get("above_ma") and not r.get("vol_ok") and r.get("rsrs_score", 0) > 0]
         near3 = [r for r in results
-                 if r.get("vol_ok") and r.get("rsrs_score", 0) > 0 and not r.get("above_ma20")]
+                 if r.get("vol_ok") and r.get("rsrs_score", 0) > 0 and not r.get("above_ma")]
 
         if near:
             codes = ", ".join(f"{r['code']}" for r in near)

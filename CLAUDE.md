@@ -5,15 +5,6 @@
 基于 Claude Code 的价值投资研究 Skill 合集。四大师框架：巴菲特、芒格、段永平、李录。
 GitHub: xbtlin/ai-invest
 
-## 项目结构
-
-```
-skills/          — 投研 Skill 定义（.md），复制到 ~/.claude/commands/ 使用
-tools/           — 辅助工具（financial_rigor.py 精确计算）
-reports/         — 投资研究报告输出
-assets/          — 图片等静态资源
-```
-
 ## 报告目录结构
 
 所有报告按**公司名**建文件夹，公司相关的所有报告放在对应文件夹内：

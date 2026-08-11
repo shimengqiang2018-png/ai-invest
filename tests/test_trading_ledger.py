@@ -3,13 +3,7 @@
 import unittest
 from decimal import Decimal
 
-from tools.trading_ledger import (
-    ExecutionConfig,
-    LedgerEntry,
-    Position,
-    TradingLedger,
-    compute_buy_quantity,
-)
+from tools.trading_ledger import ExecutionConfig, TradingLedger, compute_buy_quantity
 
 
 class ExecutionConfigTests(unittest.TestCase):
@@ -29,7 +23,7 @@ class ExecutionConfigTests(unittest.TestCase):
 
     def test_minimum_commission_is_zero_for_mianwu(self):
         config = ExecutionConfig()
-        self.assertEqual(config.minimum_commission, Decimal("0"))
+        self.assertEqual(config.minimum_commission, Decimal(0))
 
 
 class CommissionCalculationTests(unittest.TestCase):
@@ -189,6 +183,61 @@ class LedgerPositionStateTests(unittest.TestCase):
         expected_cost_after = expected_first_remaining + abs(second.net_cash_flow)
         self.assertAlmostEqual(sell.cost_basis_after, expected_cost_after, places=8)
         self.assertEqual(sell.shares_after, 1000)
+
+
+class CashReturnTests(unittest.TestCase):
+    """现金收益按交易日计提。"""
+
+    def test_default_zero_rate_is_no_op(self):
+        ledger = TradingLedger(ExecutionConfig(), cash=100000)
+
+        accrued = ledger.accrue_cash_return("2026-07-29")
+
+        self.assertEqual(accrued, 0)
+        self.assertEqual(ledger.cash, 100000)
+        self.assertEqual(ledger.total_cash_return, 0)
+        self.assertEqual(ledger.last_cash_accrual_date, "2026-07-29")
+
+    def test_positive_rate_compounds_once_per_trading_day(self):
+        ledger = TradingLedger(
+            ExecutionConfig(cash_return_rate=Decimal("0.0252")), cash=100000
+        )
+
+        first = ledger.accrue_cash_return("2026-07-29")
+        duplicate = ledger.accrue_cash_return("2026-07-29")
+        second = ledger.accrue_cash_return("2026-07-30")
+
+        self.assertAlmostEqual(first, 10.0, places=6)
+        self.assertEqual(duplicate, 0)
+        self.assertAlmostEqual(second, 100010 * 0.0252 / 252, places=6)
+        self.assertAlmostEqual(ledger.total_cash_return, first + second, places=6)
+        self.assertEqual(ledger.last_cash_accrual_date, "2026-07-30")
+
+    def test_older_date_is_rejected_without_mutating_accrual_state(self):
+        ledger = TradingLedger(
+            ExecutionConfig(cash_return_rate=Decimal("0.0252")), cash=100000
+        )
+        first = ledger.accrue_cash_return("2026-07-30")
+        cash_after_first = ledger.cash
+
+        with self.assertRaises(ValueError):
+            ledger.accrue_cash_return("2026-07-29")
+
+        self.assertEqual(ledger.cash, cash_after_first)
+        self.assertEqual(ledger.total_cash_return, first)
+        self.assertEqual(ledger.last_cash_accrual_date, "2026-07-30")
+
+    def test_invalid_date_format_is_rejected_without_mutating_state(self):
+        ledger = TradingLedger(
+            ExecutionConfig(cash_return_rate=Decimal("0.0252")), cash=100000
+        )
+
+        with self.assertRaises(ValueError):
+            ledger.accrue_cash_return("2026-7-30")
+
+        self.assertEqual(ledger.cash, 100000)
+        self.assertEqual(ledger.total_cash_return, 0)
+        self.assertIsNone(ledger.last_cash_accrual_date)
 
 
 class NAVInvariantTests(unittest.TestCase):
