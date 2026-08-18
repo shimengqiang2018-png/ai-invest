@@ -260,8 +260,12 @@ def chat_json(
                         f"MODEL JSON 解析失败，第 {attempt + 1} 次修复重试: {exc}",
                         "WARN",
                     )
-                except Exception:
-                    pass
+                except Exception as retry_exc:
+                    if log is not None:
+                        log(
+                            f"MODEL JSON 修复重试失败: {retry_exc}",
+                            "WARN",
+                        )
             text = _ask(
                 f"{user_text}\n\n注意：你上一次输出的 JSON 不合法（{exc}）。"
                 "请重新输出，必须是一个合法 JSON 对象，"

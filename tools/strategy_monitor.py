@@ -2,7 +2,6 @@
 
 import argparse
 import importlib
-import json
 import os
 import sys
 from datetime import datetime
@@ -23,6 +22,10 @@ MOMENTUM_POOL = {
     "159915": "创业板ETF",
     "159920": "恒生ETF",
 }
+
+# 多重比较校正的 N：动量推荐策略是从 ~120 组合的搜索空间（枚举 veteran c3）中选出的。
+# 用 N=120 建模「选最优」的数据挖掘偏差，比 N=1（只看单策略）更保守、诚实。
+DSR_N_TRIALS = 120
 
 DEFAULT_GRID_ETFS = (
     "512880",
@@ -45,17 +48,38 @@ _UNKNOWN_RISK = {
 }
 
 
-def load_grid_etfs():
-    """Return configured grid ETF codes without invoking another process."""
-    path = os.path.join(
-        os.path.dirname(os.path.abspath(__file__)), "..", "data", "grid_triggers.json"
-    )
+def _import_db():
+    """加载数据库访问层（momentum-dashboard/db.py），支持从 tools/ 直接运行。"""
     try:
-        with open(path, encoding="utf-8") as handle:
-            data = json.load(handle)
-        if isinstance(data, dict) and data:
-            return list(data)
-    except (OSError, json.JSONDecodeError):
+        import db as _db
+        return _db
+    except ImportError:
+        pass
+    import importlib.util
+    path = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)),
+        "..",
+        "momentum-dashboard",
+        "db.py",
+    )
+    spec = importlib.util.spec_from_file_location(
+        "momentum_db", os.path.abspath(path)
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    sys.modules["momentum_db"] = module
+    return module
+
+
+def load_grid_etfs():
+    """Return configured grid ETF codes（从数据库 grid_configs 表，文件已废弃）。"""
+    try:
+        db = _import_db()
+        configs = db.load_grid_configs() or []
+        codes = [str(c.get("code")) for c in configs if c.get("code")]
+        if codes:
+            return codes
+    except Exception:
         pass
     return list(DEFAULT_GRID_ETFS)
 
@@ -133,7 +157,7 @@ def _build_momentum(momentum_provider):
     items = envelope.get("items")
     if not isinstance(items, list):
         items = []
-    return {
+    result = {
         "status": status,
         "as_of": envelope.get("as_of"),
         "items": items,
@@ -141,6 +165,47 @@ def _build_momentum(momentum_provider):
         "selected": envelope.get("selected"),
         "pool_complete": envelope.get("pool_complete"),
     }
+    result["confidence"] = _momentum_confidence(result)
+    return result
+
+
+def _momentum_confidence(momentum):
+    """对动量推荐池跑一次历史回测，计算策略 DSR 置信度。
+
+    只在存在推荐目标（selected）时计算，避免无信号时浪费回测。
+    惰性导入回测引擎，避免加重 strategy_monitor 启动；失败返回 None
+    （置信度标注是提示性信息，不阻塞推荐）。
+    """
+    selected = momentum.get("selected")
+    if not selected or momentum.get("status") != RunStatus.OK.value:
+        return None
+    try:
+        from momentum_etf_backtest import run_backtest
+        from multiple_testing import strategy_dsr
+
+        result = run_backtest(
+            pool=MOMENTUM_POOL,
+            start_date="2016-01-01",
+            end_date=None,
+            freq="biweekly",
+            momentum_period=25,
+            include_bench=True,
+            quiet=True,
+        )
+        if not result:
+            return None
+        daily_nav = result.get("daily_nav") or []
+        if len(daily_nav) < 60:
+            return None
+        conf = strategy_dsr(daily_nav, DSR_N_TRIALS)
+        perf = result.get("performance") or {}
+        conf["annual_return_pct"] = perf.get("annual_return_pct")
+        conf["excess_return_pct"] = perf.get("excess_return_pct")
+        conf["sharpe"] = perf.get("sharpe")
+        conf["benchmark_annual_pct"] = perf.get("benchmark_annual_pct")
+        return conf
+    except Exception:  # noqa: BLE001 - 置信度失败不阻塞推荐
+        return None
 
 
 def _build_grid(grid_analyzer, codes):

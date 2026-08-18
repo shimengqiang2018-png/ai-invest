@@ -1,35 +1,36 @@
 #!/usr/bin/env python3
-"""数据访问层（当前后端 MySQL，保留 SQLite 供测试/离线开发）。
+"""数据访问层（仅支持 MySQL）。
 
 本模块是整个系统**唯一**包含 SQL / 直接操作数据库的代码层：
 业务代码（server.py / positions_parser.py / scheduler.py 等）只能通过
 本模块的函数读写数据，不得出现 SQL 或数据库驱动调用。
 
 后端切换：
-  - MySQL（默认，生产）：依赖 PyMySQL（pip install PyMySQL），连接参数来自
+  - MySQL：依赖 PyMySQL + SQLAlchemy，连接参数来自
     环境变量 DB_BACKEND=mysql / DB_HOST / DB_PORT / DB_USER / DB_PASSWORD /
     DB_NAME（可写入项目根目录 .env）。
-  - SQLite（测试/离线）：DB_BACKEND=sqlite，使用 ROOT/dashboard.db。
 
-表结构（MySQL DDL 见 schema_mysql.sql）：四张表均含
+表结构（MySQL DDL 见 schema_mysql.sql）：全部表均含
   id BIGINT 主键 / created_at 创建时间 / updated_at 更新时间 / 字段注释。
-从 SQLite 迁移旧数据见 `migrate_from_sqlite()`。
+代码不再自动建表或插入默认数据：建表与初始数据由 schema_mysql.sql / 人工维护。
 """
 
 from __future__ import annotations
 
 import json
+import logging
 import os
-import sqlite3
 import threading
 import time
 from datetime import date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
+from urllib.parse import quote_plus
+
+from sqlalchemy import create_engine
 
 
 ROOT = Path(__file__).resolve().parent
-DB_PATH = ROOT / "dashboard.db"
 
 
 def _load_env_file():
@@ -52,43 +53,100 @@ def _load_env_file():
 _load_env_file()
 
 
-# 后端配置（默认 MySQL；环境变量可覆盖）
-_backend_name = (os.environ.get("DB_BACKEND") or "mysql").strip().lower()
+# 后端配置（仅 MySQL；连接参数由环境变量可覆盖）
+_backend_name = "mysql"
 _MYSQL_HOST = os.environ.get("DB_HOST", "127.0.0.1")
 _MYSQL_PORT = int(os.environ.get("DB_PORT", "3306"))
 _MYSQL_USER = os.environ.get("DB_USER", "invest")
 _MYSQL_PASSWORD = os.environ.get("DB_PASSWORD", "invest123")
 _MYSQL_DB = os.environ.get("DB_NAME", "ai_invest")
 
+# ── 业务 SQL 日志（全部打印，进 momentum-dashboard logger = server.log）──
+_SQL_LOG_MAX_PARAM = 300      # 单个参数最大字符数（超长截断，避免日志爆炸）
+_SQL_LOG_MAX_SQL = 4000       # SQL 语句最大字符数
+_SQL_LOG_MAX_TOTAL = 8000     # 参数文本总量上限
+
+
+def _sql_params_repr(params) -> str:
+    """参数转可读文本；executemany 批量参数逐行展示，超长截断标注长度。"""
+    if not params:
+        return ""
+
+    def _fmt(value) -> str:
+        if value is None:
+            return "NULL"
+        text = str(value)
+        if len(text) > _SQL_LOG_MAX_PARAM:
+            text = text[:_SQL_LOG_MAX_PARAM] + f"...(len={len(text)})"
+        return text
+
+    if (
+        isinstance(params, (list, tuple))
+        and params
+        and isinstance(params[0], (list, tuple))
+    ):
+        parts = [
+            "(" + ", ".join(_fmt(v) for v in row) + ")"
+            for row in params
+        ]
+        text = " ".join(parts)
+    elif isinstance(params, (list, tuple)):
+        text = ", ".join(_fmt(v) for v in params)
+    else:
+        text = _fmt(params)
+    if len(text) > _SQL_LOG_MAX_TOTAL:
+        text = text[:_SQL_LOG_MAX_TOTAL] + f"...(total_len={len(text)})"
+    return text
+
+
+def _sql_log(sql: str, params=()) -> None:
+    """打印业务 SQL 完整日志（语句+参数），进 server.log；CLI 场景回退终端。"""
+    try:
+        sql_text = sql.strip()
+        if len(sql_text) > _SQL_LOG_MAX_SQL:
+            sql_text = sql_text[:_SQL_LOG_MAX_SQL] + f"...(len={len(sql)})"
+        message = f"[SQL] {sql_text}"
+        param_text = _sql_params_repr(params)
+        if param_text:
+            message += f" | params={param_text}"
+        logger = logging.getLogger("momentum-dashboard")
+        if logger.handlers:
+            logger.info(message)
+        else:
+            stamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            print(f"[{stamp}] [INFO ] {message}", flush=True)
+    except Exception:
+        pass  # SQL 日志失败不影响业务执行
+
+
 _lock = threading.RLock()
-_conn: sqlite3.Connection | None = None          # SQLite 单连接
-_local = threading.local()                        # MySQL 线程本地连接
-_migrated = False
+_engine = None  # SQLAlchemy 引擎（按当前后端惰性创建）
 
 ALLOWED_TABLES = (
     "cache",
     "positions_snapshots",
+    "holdings_current",
+    "account_summary_current",
     "parse_history",
     "api_logs",
     "signal_history",
     "grid_triggers",
+    "grid_configs",
+    "momentum_pools",
     "backtest_results",
     "scheduler_runs",
 )
 
 
 def configure(backend: str) -> str:
-    """切换后端（"mysql" / "sqlite"），返回生效后端。测试用。"""
-    global _backend_name, _conn, _migrated
-    backend = (backend or "").strip().lower()
-    if backend not in ("mysql", "sqlite"):
-        raise ValueError(f"未知数据后端: {backend}（可选 mysql/sqlite）")
+    """重置连接（仅支持 mysql；返回生效后端）。测试用。"""
+    global _backend_name, _engine
+    if (backend or "").strip().lower() != "mysql":
+        raise ValueError("仅支持 MySQL 后端（DB_BACKEND=mysql）")
     with _lock:
-        _backend_name = backend
-        _conn = None
-        _local = threading.local()
-        _migrated = False
-    return backend
+        _backend_name = "mysql"
+        _engine = None
+    return _backend_name
 
 
 def db_backend() -> str:
@@ -98,92 +156,117 @@ def db_backend() -> str:
 
 def db_info() -> dict:
     """返回当前后端连接信息（不含密码）。"""
-    if _backend_name == "mysql":
-        return {
-            "backend": "mysql",
-            "host": _MYSQL_HOST,
-            "port": _MYSQL_PORT,
-            "database": _MYSQL_DB,
-            "user": _MYSQL_USER,
-        }
-    return {"backend": "sqlite", "db_path": str(DB_PATH)}
+    return {
+        "backend": "mysql",
+        "host": _MYSQL_HOST,
+        "port": _MYSQL_PORT,
+        "database": _MYSQL_DB,
+        "user": _MYSQL_USER,
+    }
 
 
 # ---------------------------------------------------------------------------
-# 连接管理
+# SQLAlchemy 连接管理
 # ---------------------------------------------------------------------------
 
-def _connect_mysql():
-    import pymysql
-    return pymysql.connect(
-        host=_MYSQL_HOST,
-        port=_MYSQL_PORT,
-        user=_MYSQL_USER,
-        password=_MYSQL_PASSWORD,
-        database=_MYSQL_DB,
-        charset="utf8mb4",
-        autocommit=False,
-        cursorclass=pymysql.cursors.DictCursor,
+
+def _make_engine():
+    """创建 MySQL SQLAlchemy 引擎。"""
+    url = (
+        f"mysql+pymysql://{_MYSQL_USER}:{quote_plus(_MYSQL_PASSWORD)}"
+        f"@{_MYSQL_HOST}:{_MYSQL_PORT}/{_MYSQL_DB}?charset=utf8mb4"
+    )
+    return create_engine(
+        url,
+        pool_pre_ping=True,
+        pool_recycle=3600,
+        future=True,
     )
 
 
-def get_conn():
-    """返回当前后端连接（SQLite 单连接 / MySQL 每线程一连接）。"""
-    if _backend_name == "sqlite":
-        global _conn
-        if _conn is None:
-            _conn = sqlite3.connect(DB_PATH, check_same_thread=False)
-            _conn.row_factory = sqlite3.Row
-            _init_schema(_conn)
-            _maybe_migrate()
-        return _conn
-    conn = getattr(_local, "conn", None)
-    if conn is None or not conn.open:
-        conn = _connect_mysql()
-        _local.conn = conn
+def _get_engine():
+    global _engine
+    if _engine is None:
         with _lock:
-            _init_schema(conn)
-        _maybe_migrate()
-    return conn
+            if _engine is None:
+                _engine = _make_engine()
+    return _engine
+
+
+def get_conn():
+    """返回当前后端的一个 SQLAlchemy 连接（调用方负责 close/归还）。"""
+    return _get_engine().connect()
+
+
+class _ExecResult:
+    """SQLAlchemy Result 的轻量兼容包装：fetchall→dict 列表，保留 cursor 语义。"""
+
+    def __init__(self, result, rowcount=None, lastrowid=None):
+        self._result = result
+        self.rowcount = (
+            rowcount
+            if rowcount is not None
+            else (int(result.rowcount) if result is not None and result.rowcount else 0)
+        )
+        self.lastrowid = lastrowid
+
+    def fetchall(self):
+        if self._result is None:
+            return []
+        return [dict(row._mapping) for row in self._result.fetchall()]
+
+    def fetchone(self):
+        if self._result is None:
+            return None
+        row = self._result.fetchone()
+        return dict(row._mapping) if row is not None else None
+
+    def close(self):
+        if self._result is not None:
+            try:
+                self._result.close()
+            except Exception:
+                pass
+
+
+def _result_lastrowid(result) -> int | None:
+    """从 CursorResult 提取最后插入自增 id。"""
+    try:
+        value = result.lastrowid
+        if value is not None:
+            return int(value)
+    except Exception:
+        pass
+    try:
+        keys = result.insert_primary_key_rows
+        if keys and keys[0]:
+            return int(keys[0][0])
+    except Exception:
+        pass
+    return None
 
 
 def _exec(sql: str, params=()):
-    """统一执行入口：MySQL 下把 ? 占位符翻译为 %s，写操作自动提交。"""
-    if _backend_name == "mysql":
-        mysql_sql = sql.replace("?", "%s")
-        with _lock:
-            conn = get_conn()
-            cursor = conn.cursor()
-            try:
-                if params and isinstance(params, (list, tuple)) and isinstance(
-                    params[0], (list, tuple)
-                ):
-                    cursor.executemany(mysql_sql, params)
-                else:
-                    cursor.execute(mysql_sql, params)
-                conn.commit()
-                return cursor
-            except Exception:
-                conn.rollback()
-                raise
-    with _lock:
-        conn = get_conn()
+    """统一执行入口（SQLAlchemy Core + 驱动级 SQL，MySQL 占位符 %s），自动提交。"""
+    sql = sql.replace("?", "%s")
+    _sql_log(sql, params)
+    engine = _get_engine()
+    with engine.begin() as conn:
         if params and isinstance(params, (list, tuple)) and isinstance(
-            params[0], (list, tuple)
+            params[0], (list, tuple, dict)
         ):
-            cursor = conn.executemany(sql, params)
+            result = conn.exec_driver_sql(sql, list(params))
         else:
-            cursor = conn.execute(sql, params)
-        conn.commit()
-        return cursor
+            # 单条参数：list 标量需转 tuple，避免 exec_driver_sql 误判为 executemany
+            single = tuple(params) if isinstance(params, list) else params
+            result = conn.exec_driver_sql(sql, single)
+        return _ExecResult(
+            result,
+            rowcount=result.rowcount,
+            lastrowid=_result_lastrowid(result),
+        )
 
 
-def _exec_script(sql_script: str) -> None:
-    """按分号切分执行多条 DDL（兼容 sqlite3.executescript 与 PyMySQL）。"""
-    statements = [s.strip() for s in sql_script.split(";") if s.strip()]
-    for statement in statements:
-        if statement:
-            _exec(statement)
 
 
 def _count(table: str) -> int:
@@ -192,10 +275,8 @@ def _count(table: str) -> int:
 
 
 def _quote_ident(name: str) -> str:
-    """按后端返回标识符引用：MySQL 用反引号，SQLite 用双引号。"""
-    if _backend_name == "mysql":
-        return f"`{name}`"
-    return f'"{name}"'
+    """返回 MySQL 标识符引用（反引号）。"""
+    return f"`{name}`"
 
 
 def _row_to_json(row: dict) -> dict:
@@ -216,249 +297,8 @@ def _row_to_json(row: dict) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# 建表（MySQL DDL 与 schema_mysql.sql 保持一致；SQLite 仅供测试/离线）
+# 建表（DDL 见 schema_mysql.sql，代码不自动建表）
 # ---------------------------------------------------------------------------
-
-_MYSQL_SCHEMA = """
-CREATE TABLE IF NOT EXISTS cache (
-  id         BIGINT       NOT NULL AUTO_INCREMENT COMMENT '主键',
-  cache_key  VARCHAR(255) NOT NULL                COMMENT '缓存键',
-  payload    MEDIUMTEXT   NOT NULL                COMMENT '缓存内容(JSON)',
-  created_at DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
-  updated_at DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
-  PRIMARY KEY (id),
-  UNIQUE KEY uk_cache_key (cache_key)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='API结果缓存';
-
-CREATE TABLE IF NOT EXISTS positions_snapshots (
-  id         BIGINT      NOT NULL AUTO_INCREMENT COMMENT '主键',
-  date       VARCHAR(32) DEFAULT NULL            COMMENT '快照日期',
-  source     VARCHAR(64) DEFAULT NULL            COMMENT '数据来源',
-  payload    MEDIUMTEXT  NOT NULL                COMMENT '完整持仓快照(JSON)',
-  created_at DATETIME    NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
-  updated_at DATETIME    NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
-  PRIMARY KEY (id),
-  KEY idx_snapshots_date (date)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='持仓快照';
-
-CREATE TABLE IF NOT EXISTS parse_history (
-  id             BIGINT      NOT NULL AUTO_INCREMENT COMMENT '主键',
-  parse_updated_at VARCHAR(32) DEFAULT NULL          COMMENT '解析更新时间',
-  source         VARCHAR(64) DEFAULT NULL            COMMENT '解析来源',
-  holdings_count INT         DEFAULT NULL            COMMENT '持仓数量',
-  trades_count   INT         DEFAULT NULL            COMMENT '交易笔数',
-  payload        MEDIUMTEXT  DEFAULT NULL            COMMENT '解析结果(JSON)',
-  created_at     DATETIME    NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
-  updated_at     DATETIME    NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
-  PRIMARY KEY (id)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='AI持仓解析历史';
-
-CREATE TABLE IF NOT EXISTS api_logs (
-  id         BIGINT      NOT NULL AUTO_INCREMENT COMMENT '主键',
-  ts         VARCHAR(32) NOT NULL                COMMENT '日志时间(ISO8601)',
-  level      VARCHAR(16) DEFAULT NULL            COMMENT '日志级别(INFO/WARN/ERROR)',
-  message    VARCHAR(2000) DEFAULT NULL          COMMENT '日志内容',
-  created_at DATETIME    NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
-  updated_at DATETIME    NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
-  PRIMARY KEY (id),
-  KEY idx_logs_ts (ts)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='业务日志';
-
-CREATE TABLE IF NOT EXISTS signal_history (
-  id            BIGINT      NOT NULL AUTO_INCREMENT COMMENT '主键',
-  as_of         VARCHAR(32) DEFAULT NULL            COMMENT '信号日期',
-  pool          VARCHAR(64) DEFAULT NULL            COMMENT '信号池',
-  momentum      INT         DEFAULT NULL            COMMENT 'RSRS动量周期(日)',
-  status        VARCHAR(32) DEFAULT NULL            COMMENT '扫描状态',
-  items         MEDIUMTEXT  DEFAULT NULL            COMMENT '各标的信号(JSON)',
-  selected_code VARCHAR(16) DEFAULT NULL            COMMENT '目标标的代码',
-  selected_name VARCHAR(64) DEFAULT NULL            COMMENT '目标标的名称',
-  rotation      MEDIUMTEXT  DEFAULT NULL            COMMENT '轮动动作(JSON)',
-  payload       MEDIUMTEXT  DEFAULT NULL            COMMENT '完整信号结果(JSON)',
-  created_at    DATETIME    NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
-  updated_at    DATETIME    NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
-  PRIMARY KEY (id),
-  UNIQUE KEY uk_signal_day (as_of, pool, momentum),
-  KEY idx_signal_pool (pool)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='信号扫描/轮动历史';
-
-CREATE TABLE IF NOT EXISTS grid_triggers (
-  id                BIGINT       NOT NULL AUTO_INCREMENT COMMENT '主键',
-  code              VARCHAR(16)  NOT NULL                COMMENT 'ETF代码',
-  name              VARCHAR(64)  DEFAULT NULL            COMMENT 'ETF名称',
-  trigger_date      VARCHAR(32)  NOT NULL DEFAULT ''     COMMENT '触发日期时间(YYYY-MM-DD HH:MM:SS)',
-  action            VARCHAR(16)  DEFAULT NULL            COMMENT '买入/卖出',
-  trigger_type      VARCHAR(16)  NOT NULL DEFAULT 'grid' COMMENT '触发类型(grid/add/reduce/momentum)',
-  price             DECIMAL(12,4) DEFAULT NULL           COMMENT '成交价',
-  amount            DECIMAL(16,4) NOT NULL DEFAULT 0     COMMENT '成交金额(价格×数量)',
-  shares            INT          DEFAULT NULL            COMMENT '数量(份)',
-  base_price_before DECIMAL(12,4) DEFAULT NULL           COMMENT '触发前基准价',
-  base_price_after  DECIMAL(12,4) DEFAULT NULL           COMMENT '触发后基准价',
-  source            VARCHAR(32)  DEFAULT NULL            COMMENT '来源(文件/手工/策略)',
-  created_at        DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
-  updated_at        DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
-  PRIMARY KEY (id),
-  UNIQUE KEY uk_trigger (code, trigger_date, amount, shares),
-  KEY idx_triggers_code_date (code, trigger_date)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='网格触发记录';
-
-CREATE TABLE IF NOT EXISTS backtest_results (
-  id         BIGINT       NOT NULL AUTO_INCREMENT COMMENT '主键',
-  kind       VARCHAR(32)  NOT NULL                COMMENT '类型(backtest/enum/screener/grid_opt)',
-  params_key VARCHAR(255) NOT NULL                COMMENT '参数指纹(唯一)',
-  params     MEDIUMTEXT   DEFAULT NULL            COMMENT '参数(JSON)',
-  summary    MEDIUMTEXT   DEFAULT NULL            COMMENT '摘要指标(JSON)',
-  payload    MEDIUMTEXT   DEFAULT NULL            COMMENT '完整结果(JSON)',
-  created_at DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
-  updated_at DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
-  PRIMARY KEY (id),
-  UNIQUE KEY uk_result_kind_key (kind, params_key),
-  KEY idx_result_kind (kind)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='回测/寻优结果';
-
-CREATE TABLE IF NOT EXISTS scheduler_runs (
-  id          BIGINT       NOT NULL AUTO_INCREMENT COMMENT '主键',
-  run_type    VARCHAR(32)  DEFAULT NULL            COMMENT '触发类型(schedule/manual)',
-  started_at  VARCHAR(32)  DEFAULT NULL            COMMENT '开始时间',
-  finished_at VARCHAR(32)  DEFAULT NULL            COMMENT '结束时间',
-  duration_ms INT          DEFAULT NULL            COMMENT '耗时(毫秒)',
-  result      VARCHAR(32)  DEFAULT NULL            COMMENT '结果(ok/error)',
-  detail      MEDIUMTEXT   DEFAULT NULL            COMMENT '执行详情(JSON)',
-  email_sent  TINYINT(1)   DEFAULT NULL            COMMENT '邮件是否发送',
-  created_at  DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
-  updated_at  DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
-  PRIMARY KEY (id),
-  KEY idx_runs_started (started_at)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='定时任务执行历史';
-"""
-
-_SQLITE_SCHEMA = """
-CREATE TABLE IF NOT EXISTS cache (
-  id         INTEGER PRIMARY KEY AUTOINCREMENT,
-  key        TEXT UNIQUE NOT NULL,
-  payload    TEXT NOT NULL,
-  created_at REAL NOT NULL,
-  updated_at REAL NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS positions_snapshots (
-  id         INTEGER PRIMARY KEY AUTOINCREMENT,
-  date       TEXT,
-  source     TEXT,
-  payload    TEXT NOT NULL,
-  created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS parse_history (
-  id             INTEGER PRIMARY KEY AUTOINCREMENT,
-  parse_updated_at TEXT,
-  source         TEXT,
-  holdings_count INTEGER,
-  trades_count   INTEGER,
-  payload        TEXT,
-  created_at     TEXT NOT NULL,
-  updated_at     TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS api_logs (
-  id         INTEGER PRIMARY KEY AUTOINCREMENT,
-  ts         TEXT NOT NULL,
-  level      TEXT,
-  message    TEXT,
-  created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS signal_history (
-  id            INTEGER PRIMARY KEY AUTOINCREMENT,
-  as_of         TEXT,
-  pool          TEXT,
-  momentum      INTEGER,
-  status        TEXT,
-  items         TEXT,
-  selected_code TEXT,
-  selected_name TEXT,
-  rotation      TEXT,
-  payload       TEXT,
-  created_at    TEXT NOT NULL,
-  updated_at    TEXT NOT NULL,
-  UNIQUE (as_of, pool, momentum)
-);
-
-CREATE TABLE IF NOT EXISTS grid_triggers (
-  id                INTEGER PRIMARY KEY AUTOINCREMENT,
-  code              TEXT NOT NULL,
-  name              TEXT,
-  trigger_date      TEXT NOT NULL DEFAULT '',
-  action            TEXT,
-  trigger_type      TEXT NOT NULL DEFAULT 'grid',
-  price             REAL,
-  amount            REAL NOT NULL DEFAULT 0,
-  shares            INTEGER,
-  base_price_before REAL,
-  base_price_after  REAL,
-  source            TEXT,
-  created_at        TEXT NOT NULL,
-  updated_at        TEXT NOT NULL,
-  UNIQUE (code, trigger_date, amount, shares)
-);
-
-CREATE TABLE IF NOT EXISTS backtest_results (
-  id         INTEGER PRIMARY KEY AUTOINCREMENT,
-  kind       TEXT NOT NULL,
-  params_key TEXT NOT NULL,
-  params     TEXT,
-  summary    TEXT,
-  payload    TEXT,
-  created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL,
-  UNIQUE (kind, params_key)
-);
-
-CREATE TABLE IF NOT EXISTS scheduler_runs (
-  id          INTEGER PRIMARY KEY AUTOINCREMENT,
-  run_type    TEXT,
-  started_at  TEXT,
-  finished_at TEXT,
-  duration_ms INTEGER,
-  result      TEXT,
-  detail      TEXT,
-  email_sent  INTEGER,
-  created_at  TEXT NOT NULL,
-  updated_at  TEXT NOT NULL
-);
-
-CREATE INDEX IF NOT EXISTS idx_snapshots_date ON positions_snapshots(date);
-CREATE INDEX IF NOT EXISTS idx_logs_ts ON api_logs(ts);
-CREATE INDEX IF NOT EXISTS idx_signal_pool ON signal_history(pool);
-CREATE INDEX IF NOT EXISTS idx_triggers_code_date ON grid_triggers(code, trigger_date);
-CREATE INDEX IF NOT EXISTS idx_result_kind ON backtest_results(kind);
-CREATE INDEX IF NOT EXISTS idx_runs_started ON scheduler_runs(started_at);
-"""
-
-
-def _init_schema(conn) -> None:
-    if _backend_name == "mysql":
-        _exec_script(_MYSQL_SCHEMA)
-    else:
-        conn.executescript(_SQLITE_SCHEMA)
-        conn.commit()
-
-
-def _maybe_migrate() -> None:
-    global _migrated
-    if _migrated:
-        return
-    with _lock:
-        if _migrated:
-            return
-        try:
-            migrate_from_sqlite()
-        except Exception:
-            pass  # 迁移失败不影响主流程
-        _migrated = True
-
 
 # ---------------------------------------------------------------------------
 # cache
@@ -469,16 +309,11 @@ def cache_get(key: str, ttl: float | None = None):
 
     ttl=None 表示忽略过期时间（取旧缓存）；ttl=0 表示立即过期。
     """
-    if _backend_name == "mysql":
-        row = _exec(
-            "SELECT payload, UNIX_TIMESTAMP(updated_at) AS updated_at "
-            "FROM cache WHERE cache_key = ?",
-            (key,),
-        ).fetchone()
-    else:
-        row = _exec(
-            "SELECT payload, updated_at FROM cache WHERE key = ?", (key,)
-        ).fetchone()
+    row = _exec(
+        "SELECT payload, UNIX_TIMESTAMP(updated_at) AS updated_at "
+        "FROM cache WHERE cache_key = ?",
+        (key,),
+    ).fetchone()
     if row is None:
         return None
     if ttl is not None and time.time() - float(row["updated_at"]) > ttl:
@@ -491,35 +326,20 @@ def cache_get(key: str, ttl: float | None = None):
 
 def cache_set(key: str, payload: dict) -> None:
     blob = json.dumps(payload, ensure_ascii=False)
-    if _backend_name == "mysql":
-        _exec(
-            "INSERT INTO cache (cache_key, payload, created_at, updated_at) "
-            "VALUES (?, ?, NOW(), NOW()) "
-            "ON DUPLICATE KEY UPDATE payload = VALUES(payload), "
-            "updated_at = NOW()",
-            (key, blob),
-        )
-    else:
-        now = time.time()
-        _exec(
-            "INSERT INTO cache (key, payload, created_at, updated_at) "
-            "VALUES (?, ?, ?, ?) "
-            "ON CONFLICT(key) DO UPDATE SET "
-            "payload = excluded.payload, updated_at = excluded.updated_at",
-            (key, blob, now, now),
-        )
+    _exec(
+        "INSERT INTO cache (cache_key, payload, created_at, updated_at) "
+        "VALUES (?, ?, NOW(), NOW()) "
+        "ON DUPLICATE KEY UPDATE payload = VALUES(payload), "
+        "updated_at = NOW()",
+        (key, blob),
+    )
 
 
 def cache_delete_expired() -> int:
     """清理 7 天前的缓存行，返回删除条数。"""
-    if _backend_name == "mysql":
-        cutoff = (datetime.now() - timedelta(days=7)).strftime(
-            "%Y-%m-%d %H:%M:%S"
-        )
-        return _exec(
-            "DELETE FROM cache WHERE updated_at < ?", (cutoff,)
-        ).rowcount
-    cutoff = time.time() - 7 * 86400
+    cutoff = (datetime.now() - timedelta(days=7)).strftime(
+        "%Y-%m-%d %H:%M:%S"
+    )
     return _exec("DELETE FROM cache WHERE updated_at < ?", (cutoff,)).rowcount
 
 
@@ -534,28 +354,15 @@ def cache_flush() -> int:
 
 def save_positions_snapshot(snapshot: dict) -> int:
     now = datetime.now().astimezone().isoformat(timespec="seconds")
-    if _backend_name == "mysql":
-        cursor = _exec(
-            "INSERT INTO positions_snapshots (date, source, payload, "
-            "created_at, updated_at) VALUES (?, ?, ?, NOW(), NOW())",
-            (
-                snapshot.get("date"),
-                snapshot.get("source"),
-                json.dumps(snapshot, ensure_ascii=False),
-            ),
-        )
-    else:
-        cursor = _exec(
-            "INSERT INTO positions_snapshots (date, source, payload, "
-            "created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
-            (
-                snapshot.get("date"),
-                snapshot.get("source"),
-                json.dumps(snapshot, ensure_ascii=False),
-                now,
-                now,
-            ),
-        )
+    cursor = _exec(
+        "INSERT INTO positions_snapshots (date, source, payload, "
+        "created_at, updated_at) VALUES (?, ?, ?, NOW(), NOW())",
+        (
+            snapshot.get("date"),
+            snapshot.get("source"),
+            json.dumps(snapshot, ensure_ascii=False),
+        ),
+    )
     return int(cursor.lastrowid)
 
 
@@ -571,6 +378,107 @@ def latest_positions_snapshot() -> dict | None:
         return None
 
 
+def save_holdings_current(
+    holdings: list[dict], account_summary: dict | None = None
+) -> None:
+    """把当前持仓+账户汇总写入数据库（先清空再写，保持单一权威快照）。
+
+    holdings 每项字段: code/name/shares/available/price/cost/market_value/
+    pnl/pnl_pct/daily_pnl/strategy/bucket/base_shares/source/verified
+    """
+    now = datetime.now().astimezone().isoformat(timespec="seconds")
+    _exec("DELETE FROM holdings_current")
+    if account_summary:
+        _exec("DELETE FROM account_summary_current")
+        summary_cols = (
+            "total_assets", "securities_value", "available_cash", "withdrawable",
+            "position_ratio", "daily_pnl", "total_pnl", "source",
+        )
+        summary_vals = [account_summary.get(key) for key in summary_cols]
+        _exec(
+            "INSERT INTO account_summary_current "
+            f"({', '.join(summary_cols)}, updated_at) VALUES "
+            f"({', '.join('?' for _ in summary_cols)}, NOW())",
+            summary_vals,
+        )
+
+    holding_cols = (
+        "code", "name", "shares", "available", "price", "cost", "market_value",
+        "pnl", "pnl_pct", "daily_pnl", "strategy", "bucket", "base_shares",
+        "source", "verified",
+    )
+    rows = []
+    for h in holdings:
+        rows.append(tuple([
+            h.get("code"),
+            h.get("name"),
+            int(h.get("shares") or 0),
+            h.get("available"),
+            h.get("price"),
+            h.get("cost"),
+            h.get("market_value"),
+            h.get("pnl"),
+            h.get("pnl_pct"),
+            h.get("daily_pnl"),
+            h.get("strategy"),
+            h.get("bucket"),
+            int(h.get("base_shares") or 0),
+            h.get("source"),
+            1 if h.get("verified") else 0,
+        ]))
+    if not rows:
+        return
+    placeholders = ", ".join("?" for _ in holding_cols)
+    _exec(
+        "INSERT INTO holdings_current "
+        f"({', '.join(holding_cols)}, updated_at) VALUES ({placeholders}, NOW())",
+        rows,
+    )
+
+
+def load_holdings_current() -> dict | None:
+    """从数据库读取当前持仓快照（与旧 positions_latest.json 结构兼容）。"""
+    rows = _exec(
+        "SELECT code, name, shares, available, price, cost, market_value, pnl, "
+        "pnl_pct, daily_pnl, strategy, bucket, base_shares, source, verified "
+        "FROM holdings_current ORDER BY market_value DESC"
+    ).fetchall()
+    if not rows:
+        return None
+    holdings = []
+    for row in rows:
+        r = _row_to_json(dict(row))
+        holdings.append({
+            "code": r.get("code"),
+            "name": r.get("name"),
+            "shares": r.get("shares"),
+            "available": r.get("available"),
+            "price": r.get("price"),
+            "cost": r.get("cost"),
+            "market_value": r.get("market_value"),
+            "pnl": r.get("pnl"),
+            "pnl_pct": r.get("pnl_pct"),
+            "daily_pnl": r.get("daily_pnl"),
+            "strategy": r.get("strategy"),
+            "bucket": r.get("bucket"),
+            "base_shares": r.get("base_shares"),
+            "source": r.get("source"),
+            "verified": r.get("verified"),
+        })
+    summary_row = _exec(
+        "SELECT total_assets, securities_value, available_cash, withdrawable, "
+        "position_ratio, daily_pnl, total_pnl, source, updated_at "
+        "FROM account_summary_current ORDER BY id DESC LIMIT 1"
+    ).fetchone()
+    summary = _row_to_json(dict(summary_row)) if summary_row else {}
+    return {
+        "date": summary.get("updated_at"),
+        "source": summary.get("source"),
+        "account_summary": summary,
+        "holdings": holdings,
+    }
+
+
 def append_parse_history(
     parse_updated_at: str,
     source: str,
@@ -579,34 +487,18 @@ def append_parse_history(
     payload: dict,
 ) -> int:
     now = datetime.now().astimezone().isoformat(timespec="seconds")
-    if _backend_name == "mysql":
-        cursor = _exec(
-            "INSERT INTO parse_history "
-            "(parse_updated_at, source, holdings_count, trades_count, payload, "
-            "created_at, updated_at) VALUES (?, ?, ?, ?, ?, NOW(), NOW())",
-            (
-                parse_updated_at,
-                source,
-                holdings_count,
-                trades_count,
-                json.dumps(payload, ensure_ascii=False),
-            ),
-        )
-    else:
-        cursor = _exec(
-            "INSERT INTO parse_history "
-            "(parse_updated_at, source, holdings_count, trades_count, payload, "
-            "created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (
-                parse_updated_at,
-                source,
-                holdings_count,
-                trades_count,
-                json.dumps(payload, ensure_ascii=False),
-                now,
-                now,
-            ),
-        )
+    cursor = _exec(
+        "INSERT INTO parse_history "
+        "(parse_updated_at, source, holdings_count, trades_count, payload, "
+        "created_at, updated_at) VALUES (?, ?, ?, ?, ?, NOW(), NOW())",
+        (
+            parse_updated_at,
+            source,
+            holdings_count,
+            trades_count,
+            json.dumps(payload, ensure_ascii=False),
+        ),
+    )
     return int(cursor.lastrowid)
 
 
@@ -616,19 +508,11 @@ def append_parse_history(
 
 def append_log(ts: str, level: str, message: str) -> None:
     try:
-        if _backend_name == "mysql":
-            _exec(
-                "INSERT INTO api_logs (ts, level, message, created_at, "
-                "updated_at) VALUES (?, ?, ?, NOW(), NOW())",
-                (ts, level, message[:2000]),
-            )
-        else:
-            now = datetime.now().astimezone().isoformat(timespec="seconds")
-            _exec(
-                "INSERT INTO api_logs (ts, level, message, created_at, "
-                "updated_at) VALUES (?, ?, ?, ?, ?)",
-                (ts, level, message[:2000], now, now),
-            )
+        _exec(
+            "INSERT INTO api_logs (ts, level, message, created_at, "
+            "updated_at) VALUES (?, ?, ?, NOW(), NOW())",
+            (ts, level, message[:2000]),
+        )
     except Exception:
         pass  # 日志入库失败不影响主流程
 
@@ -652,30 +536,12 @@ def recent_logs(limit: int = 100, level: str | None = None) -> list[dict]:
 def cleanup_old_logs(days: int = 7) -> int:
     """删除超过 days 天的业务日志（api_logs），返回删除条数。"""
     days = max(1, int(days))
-    if _backend_name == "mysql":
-        cutoff = (datetime.now() - timedelta(days=days)).strftime(
-            "%Y-%m-%d %H:%M:%S"
-        )
-        return _exec(
-            "DELETE FROM api_logs WHERE created_at < ?", (cutoff,)
-        ).rowcount
-    cutoff = (datetime.now().astimezone() - timedelta(days=days)).isoformat(
-        timespec="seconds"
+    cutoff = (datetime.now() - timedelta(days=days)).strftime(
+        "%Y-%m-%d %H:%M:%S"
     )
     return _exec(
         "DELETE FROM api_logs WHERE created_at < ?", (cutoff,)
     ).rowcount
-
-
-# ---------------------------------------------------------------------------
-# signal_history / grid_triggers / backtest_results / scheduler_runs
-# ---------------------------------------------------------------------------
-
-def _to_decimal(value):
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return None
 
 
 def append_signal_history(
@@ -694,39 +560,20 @@ def append_signal_history(
     items_blob = json.dumps(items, ensure_ascii=False)
     rotation_blob = json.dumps(rotation, ensure_ascii=False) if rotation else None
     payload_blob = json.dumps(payload, ensure_ascii=False)
-    if _backend_name == "mysql":
-        cursor = _exec(
-            "INSERT INTO signal_history "
-            "(as_of, pool, momentum, status, items, selected_code, selected_name, "
-            "rotation, payload, created_at, updated_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW()) "
-            "ON DUPLICATE KEY UPDATE status = VALUES(status), "
-            "items = VALUES(items), selected_code = VALUES(selected_code), "
-            "selected_name = VALUES(selected_name), rotation = VALUES(rotation), "
-            "payload = VALUES(payload), updated_at = NOW()",
-            (
-                as_of, pool, momentum, status, items_blob,
-                selected_code, selected_name, rotation_blob, payload_blob,
-            ),
-        )
-    else:
-        cursor = _exec(
-            "INSERT INTO signal_history "
-            "(as_of, pool, momentum, status, items, selected_code, selected_name, "
-            "rotation, payload, created_at, updated_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
-            "ON CONFLICT(as_of, pool, momentum) DO UPDATE SET "
-            "status = excluded.status, items = excluded.items, "
-            "selected_code = excluded.selected_code, "
-            "selected_name = excluded.selected_name, "
-            "rotation = excluded.rotation, payload = excluded.payload, "
-            "updated_at = excluded.updated_at",
-            (
-                as_of, pool, momentum, status, items_blob,
-                selected_code, selected_name, rotation_blob, payload_blob,
-                now, now,
-            ),
-        )
+    cursor = _exec(
+        "INSERT INTO signal_history "
+        "(as_of, pool, momentum, status, items, selected_code, selected_name, "
+        "rotation, payload, created_at, updated_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW()) "
+        "ON DUPLICATE KEY UPDATE status = VALUES(status), "
+        "items = VALUES(items), selected_code = VALUES(selected_code), "
+        "selected_name = VALUES(selected_name), rotation = VALUES(rotation), "
+        "payload = VALUES(payload), updated_at = NOW()",
+        (
+            as_of, pool, momentum, status, items_blob,
+            selected_code, selected_name, rotation_blob, payload_blob,
+        ),
+    )
     return int(cursor.lastrowid)
 
 
@@ -744,70 +591,6 @@ def recent_signal_history(limit: int = 50) -> list[dict]:
                 pass
         out.append(item)
     return out
-
-
-def seed_grid_triggers_from_file(
-    path, source: str = "file", name_map: dict | None = None
-) -> int:
-    """从 grid_triggers.json 幂等导入触发记录（按唯一键去重），返回写入条数。"""
-    try:
-        data = json.loads(Path(path).read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return 0
-    if not isinstance(data, dict):
-        return 0
-    now = datetime.now().astimezone().isoformat(timespec="seconds")
-    rows = []
-    for code, records in data.items():
-        for record in records or []:
-            if not isinstance(record, dict):
-                continue
-            name = (name_map or {}).get(code)
-            price = _to_decimal(record.get("price"))
-            shares = record.get("shares")
-            try:
-                shares_i = int(shares)
-            except (TypeError, ValueError):
-                shares_i = None
-            amount = round(price * shares_i, 4) if price is not None and shares_i else 0
-            date = str(record.get("date") or "").strip()
-            trade_time = str(record.get("time") or "").strip()
-            trigger_date = f"{date} {trade_time or '00:00:00'}" if date else ""
-            rows.append(
-                (
-                    code,
-                    name,
-                    trigger_date,
-                    record.get("action"),
-                    record.get("type") or "grid",
-                    price,
-                    amount,
-                    shares_i,
-                    _to_decimal(record.get("base_price_before")),
-                    _to_decimal(record.get("base_price_after")),
-                    source,
-                )
-            )
-    if not rows:
-        return 0
-    if _backend_name == "mysql":
-        cursor = _exec(
-            "INSERT IGNORE INTO grid_triggers "
-            "(code, name, trigger_date, action, trigger_type, price, amount, shares, "
-            "base_price_before, base_price_after, source, created_at, updated_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())",
-            rows,
-        )
-    else:
-        rows_with_time = [tuple(row) + (now, now) for row in rows]
-        cursor = _exec(
-            "INSERT OR IGNORE INTO grid_triggers "
-            "(code, name, trigger_date, action, trigger_type, price, amount, shares, "
-            "base_price_before, base_price_after, source, created_at, updated_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            rows_with_time,
-        )
-    return int(cursor.rowcount)
 
 
 def append_grid_trigger(
@@ -842,23 +625,27 @@ def append_grid_trigger(
     ).fetchone()
     if exists is not None:
         return "duplicate"
-    if _backend_name == "mysql":
-        _exec(
-            "INSERT INTO grid_triggers "
-            "(code, name, trigger_date, action, trigger_type, price, amount, shares, "
-            "base_price_before, base_price_after, source, created_at, updated_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())",
-            (code, name, trigger_date, action, trigger_type, price_f, amount_f, shares_i,
-             base_price_before, base_price_after, source),
+    _exec(
+        "INSERT INTO grid_triggers "
+        "(code, name, trigger_date, action, trigger_type, price, amount, shares, "
+        "base_price_before, base_price_after, source, created_at, updated_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())",
+        (code, name, trigger_date, action, trigger_type, price_f, amount_f, shares_i,
+         base_price_before, base_price_after, source),
+    )
+    # 持仓联动：新增触发记录后同步更新 holdings_current（买增卖减）
+    try:
+        _sync_holding_after_grid_trigger(code, action, price_f, shares_i)
+    except Exception as exc:
+        logging.getLogger("momentum-dashboard").warning(
+            "GRID 触发后持仓联动失败 code=%s: %s", code, exc
         )
-    else:
-        _exec(
-            "INSERT INTO grid_triggers "
-            "(code, name, trigger_date, action, trigger_type, price, amount, shares, "
-            "base_price_before, base_price_after, source, created_at, updated_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (code, name, trigger_date, action, trigger_type, price_f, amount_f, shares_i,
-             base_price_before, base_price_after, source, now, now),
+    # 配置联动：base_price 更新为触发后基准价，并按价格区间重算层数
+    try:
+        _sync_grid_config_after_trigger(code, base_price_after)
+    except Exception as exc:
+        logging.getLogger("momentum-dashboard").warning(
+            "GRID 触发后配置联动失败 code=%s: %s", code, exc
         )
     return "inserted"
 
@@ -884,6 +671,204 @@ def grid_triggers_for_code(code: str) -> list[dict]:
         (code,),
     ).fetchall()
     return [_row_to_json(dict(row)) for row in rows]
+
+
+_GRID_CONFIG_COLS = (
+    "code", "name", "strategy_type", "base_price", "spacing_up_pct",
+    "spacing_down_pct", "price_low", "price_high", "order_type_sell",
+    "order_type_buy", "shares_per_grid", "base_position", "max_position",
+    "levels_above", "levels_below", "status", "note", "source",
+)
+
+
+def save_grid_configs(configs: list[dict]) -> int:
+    """全量 upsert 网格交易配置（按 code 唯一）。"""
+    now = datetime.now().astimezone().isoformat(timespec="seconds")
+    rows = []
+    for config in configs or []:
+        rows.append(tuple(
+            (config.get("status") or "active")
+            if key == "status"
+            else (config.get("strategy_type") or "网格交易")
+            if key == "strategy_type"
+            else config.get(key)
+            for key in _GRID_CONFIG_COLS
+        ))
+    if not rows:
+        return 0
+    placeholders = ", ".join("?" for _ in _GRID_CONFIG_COLS)
+    update_cols = [key for key in _GRID_CONFIG_COLS if key != "code"]
+    updates = ", ".join(f"{key}=new.{key}" for key in update_cols)
+    cursor = _exec(
+        "INSERT INTO grid_configs "
+        f"({', '.join(_GRID_CONFIG_COLS)}, created_at, updated_at) "
+        f"VALUES ({placeholders}, NOW(), NOW()) AS new "
+        f"ON DUPLICATE KEY UPDATE {updates}, updated_at=NOW()",
+        rows,
+    )
+    return int(cursor.rowcount)
+
+
+def load_grid_configs() -> list[dict]:
+    """读取全部网格交易配置。"""
+    rows = _exec(
+        f"SELECT {', '.join(_GRID_CONFIG_COLS)} FROM grid_configs ORDER BY code"
+    ).fetchall()
+    return [_row_to_json(dict(row)) for row in rows]
+
+
+def get_grid_config(code: str) -> dict | None:
+    """读取单个标的的网格交易配置。"""
+    row = _exec(
+        f"SELECT {', '.join(_GRID_CONFIG_COLS)} FROM grid_configs WHERE code = ?",
+        (code,),
+    ).fetchone()
+    return _row_to_json(dict(row)) if row else None
+
+
+_MOMENTUM_POOL_COLS = (
+    "pool_key", "pool_type", "description", "codes", "defensive_code",
+    "is_recommended", "sort_order", "enabled",
+)
+
+
+def save_momentum_pools(pools: list[dict]) -> int:
+    """全量 upsert 动量池配置（按 pool_key 唯一）。"""
+    now = datetime.now().astimezone().isoformat(timespec="seconds")
+    rows = []
+    for pool in pools or []:
+        rows.append(tuple(
+            (pool.get("pool_type") or "signal")
+            if key == "pool_type"
+            else (1 if pool.get(key) else 0)
+            if key in ("is_recommended", "enabled")
+            else int(pool.get(key) or 0)
+            if key == "sort_order"
+            else pool.get(key)
+            for key in _MOMENTUM_POOL_COLS
+        ))
+    if not rows:
+        return 0
+    placeholders = ", ".join("?" for _ in _MOMENTUM_POOL_COLS)
+    update_cols = [key for key in _MOMENTUM_POOL_COLS if key != "pool_key"]
+    updates = ", ".join(f"{key}=new.{key}" for key in update_cols)
+    cursor = _exec(
+        "INSERT INTO momentum_pools "
+        f"({', '.join(_MOMENTUM_POOL_COLS)}, created_at, updated_at) "
+        f"VALUES ({placeholders}, NOW(), NOW()) AS new "
+        f"ON DUPLICATE KEY UPDATE {updates}, updated_at=NOW()",
+        rows,
+    )
+    return int(cursor.rowcount)
+
+
+def load_momentum_pools() -> list[dict]:
+    """读取全部动量池配置（按 sort_order 排序）。"""
+    rows = _exec(
+        f"SELECT {', '.join(_MOMENTUM_POOL_COLS)} FROM momentum_pools "
+        "ORDER BY sort_order ASC, pool_key ASC"
+    ).fetchall()
+    return [_row_to_json(dict(row)) for row in rows]
+
+
+def _sync_holding_after_grid_trigger(
+    code: str, action: str, price: float, shares: int
+) -> None:
+    """触发记录新增后联动更新 holdings_current：买增卖减，
+    按成交价刷新现价/加权成本/市值/浮动盈亏。"""
+    row = _exec(
+        "SELECT * FROM holdings_current WHERE code = ?", (code,)
+    ).fetchone()
+    if row is None:
+        return
+    h = dict(row)
+    cur_shares = int(h.get("shares") or 0)
+    cur_available = h.get("available")
+    cur_cost = (
+        float(h.get("cost")) if h.get("cost") is not None else None
+    )
+    is_buy = "buy" in str(action).lower() or "买" in str(action)
+    shares_delta = int(shares)
+    if is_buy:
+        new_shares = cur_shares + shares_delta
+        if cur_cost is not None and cur_shares > 0:
+            new_cost = (cur_cost * cur_shares + float(price) * shares_delta) / new_shares
+        else:
+            new_cost = float(price)
+        new_available = (
+            cur_available + shares_delta
+            if cur_available is not None
+            else None
+        )
+    else:
+        new_shares = max(cur_shares - shares_delta, 0)
+        new_cost = cur_cost
+        new_available = (
+            max(cur_available - shares_delta, 0)
+            if cur_available is not None
+            else None
+        )
+    price_now = float(price)
+    new_mv = round(new_shares * price_now, 3)
+    if new_shares <= 0:
+        # 已清仓：浮动盈亏与盈亏率归 0
+        new_pnl = 0.0
+        new_pnl_pct = 0.0
+    elif new_cost and new_cost > 0:
+        new_pnl = round((price_now - new_cost) * new_shares, 3)
+        new_pnl_pct = round((price_now / new_cost - 1) * 100, 3)
+    else:
+        new_pnl = None
+        new_pnl_pct = None
+    _exec(
+        "UPDATE holdings_current SET shares=?, available=?, price=?, cost=?, "
+        "market_value=?, pnl=?, pnl_pct=?, updated_at=NOW() WHERE code=?",
+        (
+            new_shares, new_available, price_now, new_cost,
+            new_mv, new_pnl, new_pnl_pct, code,
+        ),
+    )
+
+
+def _sync_grid_config_after_trigger(code: str, base_price_after) -> None:
+    """触发后同步网格配置：base_price 更新为触发后基准价，
+    并按固定价格区间（price_low/price_high）反推重算 levels_above/levels_below。
+    层级公式与 grid_trading.calc_grid_levels 一致（复利式）。"""
+    if base_price_after is None:
+        return
+    config = get_grid_config(code)
+    if not config:
+        return
+    import math
+
+    base = float(base_price_after)
+    up = config.get("spacing_up_pct")
+    down = config.get("spacing_down_pct")
+    low = config.get("price_low")
+    high = config.get("price_high")
+    levels_above = config.get("levels_above")
+    levels_below = config.get("levels_below")
+
+    if up and high is not None and base > 0:
+        high_f = float(high)
+        if high_f > base:
+            ratio = math.log(high_f / base) / math.log(1 + float(up) / 100)
+            levels_above = max(0, int(round(ratio)))
+        else:
+            levels_above = 0
+    if down and low is not None and base > 0:
+        low_f = float(low)
+        if low_f < base:
+            ratio = math.log(low_f / base) / math.log(1 - float(down) / 100)
+            levels_below = max(0, int(round(ratio)))
+        else:
+            levels_below = 0
+
+    _exec(
+        "UPDATE grid_configs SET base_price=?, levels_above=?, levels_below=?, "
+        "updated_at=NOW() WHERE code=?",
+        (base, levels_above, levels_below, code),
+    )
 
 
 def update_grid_trigger_base_prices(
@@ -938,26 +923,15 @@ def upsert_backtest_result(
     params_blob = json.dumps(params, ensure_ascii=False)
     summary_blob = json.dumps(summary, ensure_ascii=False)
     payload_blob = json.dumps(payload, ensure_ascii=False)
-    if _backend_name == "mysql":
-        cursor = _exec(
-            "INSERT INTO backtest_results "
-            "(kind, params_key, params, summary, payload, created_at, updated_at) "
-            "VALUES (?, ?, ?, ?, ?, NOW(), NOW()) "
-            "ON DUPLICATE KEY UPDATE params = VALUES(params), "
-            "summary = VALUES(summary), payload = VALUES(payload), "
-            "updated_at = NOW()",
-            (kind, params_key, params_blob, summary_blob, payload_blob),
-        )
-    else:
-        cursor = _exec(
-            "INSERT INTO backtest_results "
-            "(kind, params_key, params, summary, payload, created_at, updated_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?) "
-            "ON CONFLICT(kind, params_key) DO UPDATE SET "
-            "params = excluded.params, summary = excluded.summary, "
-            "payload = excluded.payload, updated_at = excluded.updated_at",
-            (kind, params_key, params_blob, summary_blob, payload_blob, now, now),
-        )
+    cursor = _exec(
+        "INSERT INTO backtest_results "
+        "(kind, params_key, params, summary, payload, created_at, updated_at) "
+        "VALUES (?, ?, ?, ?, ?, NOW(), NOW()) "
+        "ON DUPLICATE KEY UPDATE params = VALUES(params), "
+        "summary = VALUES(summary), payload = VALUES(payload), "
+        "updated_at = NOW()",
+        (kind, params_key, params_blob, summary_blob, payload_blob),
+    )
     return int(cursor.lastrowid)
 
 
@@ -979,6 +953,54 @@ def get_backtest_result(kind: str, params_key: str) -> dict | None:
         return None
 
 
+def latest_backtest_result(kind: str) -> dict | None:
+    """返回该 kind 最近一次写入的回测结果（按 updated_at 倒序）。"""
+    rows = _exec(
+        "SELECT params_key, params, summary, payload, updated_at "
+        "FROM backtest_results WHERE kind = ? "
+        "ORDER BY updated_at DESC LIMIT 1",
+        (kind,),
+    ).fetchall()
+    if not rows:
+        return None
+    row = _row_to_json(dict(rows[0]))
+    try:
+        return {
+            "params_key": row.get("params_key"),
+            "params": json.loads(row.get("params") or "{}"),
+            "summary": json.loads(row.get("summary") or "{}"),
+            "payload": json.loads(row.get("payload") or "{}"),
+            "updated_at": row.get("updated_at"),
+        }
+    except (json.JSONDecodeError, TypeError):
+        return None
+
+
+def latest_grid_opt_result(code: str) -> dict | None:
+    """返回该标的最新的网格寻优结果（kind='grid_opt'，含最优参数与时间）。"""
+    rows = _exec(
+        "SELECT params, summary, updated_at FROM backtest_results "
+        "WHERE kind = 'grid_opt' AND params_key LIKE ? "
+        "ORDER BY id DESC LIMIT 1",
+        (f"{code}|%",),
+    ).fetchall()
+    if not rows:
+        return None
+    row = _row_to_json(dict(rows[0]))
+    try:
+        summary = json.loads(row.get("summary") or "{}")
+    except (json.JSONDecodeError, TypeError):
+        summary = {}
+    best = (summary or {}).get(code)
+    if not best:
+        return None
+    return {
+        "best": best,
+        "params": json.loads(row.get("params") or "{}"),
+        "updated_at": row.get("updated_at"),
+    }
+
+
 def append_scheduler_run(
     run_type: str,
     started_at: str,
@@ -991,23 +1013,13 @@ def append_scheduler_run(
     now = datetime.now().astimezone().isoformat(timespec="seconds")
     detail_blob = json.dumps(detail, ensure_ascii=False)
     email = 1 if email_sent else (0 if email_sent is False else None)
-    if _backend_name == "mysql":
-        cursor = _exec(
-            "INSERT INTO scheduler_runs "
-            "(run_type, started_at, finished_at, duration_ms, result, detail, "
-            "email_sent, created_at, updated_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, NOW(), NOW())",
-            (run_type, started_at, finished_at, duration_ms, result, detail_blob, email),
-        )
-    else:
-        cursor = _exec(
-            "INSERT INTO scheduler_runs "
-            "(run_type, started_at, finished_at, duration_ms, result, detail, "
-            "email_sent, created_at, updated_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (run_type, started_at, finished_at, duration_ms, result, detail_blob,
-             email, now, now),
-        )
+    cursor = _exec(
+        "INSERT INTO scheduler_runs "
+        "(run_type, started_at, finished_at, duration_ms, result, detail, "
+        "email_sent, created_at, updated_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, NOW(), NOW())",
+        (run_type, started_at, finished_at, duration_ms, result, detail_blob, email),
+    )
     return int(cursor.lastrowid)
 
 
@@ -1031,46 +1043,29 @@ def recent_scheduler_runs(limit: int = 50) -> list[dict]:
 # ---------------------------------------------------------------------------
 
 def _table_columns(table: str) -> list[dict]:
-    """返回列信息 [{name, type, comment}]（MySQL 有注释，SQLite 注释为空）。"""
-    if _backend_name == "mysql":
-        rows = _exec(
-            "SELECT column_name AS name, column_type AS type, "
-            "column_comment AS comment "
-            "FROM information_schema.columns "
-            "WHERE table_schema = DATABASE() AND table_name = ? "
-            "ORDER BY ordinal_position",
-            (table,),
-        ).fetchall()
-    else:
-        rows = _exec(f"PRAGMA table_info({_quote_ident(table)})").fetchall()
-        return [
-            {"name": row["name"], "type": row["type"] or "", "comment": ""}
-            for row in rows
-        ]
+    """返回列信息 [{name, type, comment}]。"""
+    rows = _exec(
+        "SELECT column_name AS name, column_type AS type, "
+        "column_comment AS comment "
+        "FROM information_schema.columns "
+        "WHERE table_schema = DATABASE() AND table_name = ? "
+        "ORDER BY ordinal_position",
+        (table,),
+    ).fetchall()
     return [dict(row) for row in rows]
 
 
 def list_tables() -> list[dict]:
     """列出业务表：名称、行数、列名、列信息（含注释）。"""
-    if _backend_name == "mysql":
-        names = [
-            row["name"]
-            for row in _exec(
-                "SELECT table_name AS name FROM information_schema.tables "
-                "WHERE table_schema = DATABASE() AND table_name IN "
-                "('cache','positions_snapshots','parse_history','api_logs') "
-                "ORDER BY table_name"
-            ).fetchall()
-        ]
-    else:
-        conn = get_conn()
-        names = [
-            row["name"]
-            for row in conn.execute(
-                "SELECT name FROM sqlite_master WHERE type='table' "
-                "AND name NOT LIKE 'sqlite_%' ORDER BY name"
-            ).fetchall()
-        ]
+    names = [
+        row["name"]
+        for row in _exec(
+            "SELECT table_name AS name FROM information_schema.tables "
+            "WHERE table_schema = DATABASE() AND table_name IN "
+            "('cache','positions_snapshots','parse_history','api_logs') "
+            "ORDER BY table_name"
+        ).fetchall()
+    ]
     tables = []
     for name in names:
         count = _count(name)
@@ -1113,16 +1108,12 @@ def stats() -> dict:
     counts = {}
     for table in ALLOWED_TABLES:
         counts[table] = _count(table)
-    if _backend_name == "mysql":
-        row = _exec(
-            "SELECT COALESCE(SUM(data_length + index_length), 0) AS size "
-            "FROM information_schema.tables WHERE table_schema = DATABASE()"
-        ).fetchone()
-        size = int(row["size"])
-        info = db_info()
-    else:
-        size = DB_PATH.stat().st_size if DB_PATH.exists() else 0
-        info = db_info()
+    row = _exec(
+        "SELECT COALESCE(SUM(data_length + index_length), 0) AS size "
+        "FROM information_schema.tables WHERE table_schema = DATABASE()"
+    ).fetchone()
+    size = int(row["size"])
+    info = db_info()
     latest = latest_positions_snapshot()
     return {
         "db_info": info,
@@ -1130,121 +1121,3 @@ def stats() -> dict:
         "tables": counts,
         "latest_snapshot": latest and latest.get("date"),
     }
-
-
-# ---------------------------------------------------------------------------
-# SQLite → MySQL 数据迁移（一次性、幂等）
-# ---------------------------------------------------------------------------
-
-def _to_mysql_dt(value) -> str | None:
-    """把 ISO 时间字符串转 MySQL DATETIME；失败返回 None。"""
-    if not value:
-        return None
-    text = str(value)
-    try:
-        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
-        return parsed.strftime("%Y-%m-%d %H:%M:%S")
-    except ValueError:
-        return None
-
-
-def migrate_from_sqlite() -> dict:
-    """后端为 MySQL 时，把旧 SQLite dashboard.db 的四张表数据迁入（幂等）。
-
-    每张表仅在 MySQL 侧为空时迁移；返回 {表名: 迁移行数}。
-    """
-    if _backend_name != "mysql" or not DB_PATH.exists():
-        return {}
-    migrated: dict = {}
-    src = sqlite3.connect(str(DB_PATH))
-    src.row_factory = sqlite3.Row
-    try:
-        existing = {
-            row["name"]
-            for row in src.execute(
-                "SELECT name FROM sqlite_master WHERE type='table'"
-            ).fetchall()
-        }
-        for table in ALLOWED_TABLES:
-            if table not in existing:
-                continue
-            if _count(table) > 0:
-                continue
-            rows = src.execute(f'SELECT * FROM "{table}"').fetchall()
-            if not rows:
-                continue
-            n = _copy_table(table, [dict(row) for row in rows])
-            if n:
-                migrated[table] = n
-    finally:
-        src.close()
-    return migrated
-
-
-def _copy_table(table: str, rows: list[dict]) -> int:
-    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    if table == "cache":
-        cursor = _exec(
-            "INSERT INTO cache (cache_key, payload, created_at, updated_at) "
-            "VALUES (?, ?, ?, ?)",
-            [
-                (row["key"], row["payload"], now, now)
-                for row in rows
-            ],
-        )
-    elif table == "positions_snapshots":
-        cursor = _exec(
-            "INSERT INTO positions_snapshots "
-            "(id, date, source, payload, created_at, updated_at) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
-            [
-                (
-                    row["id"],
-                    row.get("date"),
-                    row.get("source"),
-                    row["payload"],
-                    _to_mysql_dt(row.get("created_at")) or now,
-                    now,
-                )
-                for row in rows
-            ],
-        )
-    elif table == "parse_history":
-        cursor = _exec(
-            "INSERT INTO parse_history "
-            "(id, parse_updated_at, source, holdings_count, trades_count, payload, "
-            "created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            [
-                (
-                    row["id"],
-                    row.get("updated_at") or row.get("parse_updated_at"),
-                    row.get("source"),
-                    row.get("holdings_count"),
-                    row.get("trades_count"),
-                    row.get("payload"),
-                    _to_mysql_dt(row.get("created_at")) or now,
-                    now,
-                )
-                for row in rows
-            ],
-        )
-    elif table == "api_logs":
-        cursor = _exec(
-            "INSERT INTO api_logs "
-            "(id, ts, level, message, created_at, updated_at) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
-            [
-                (
-                    row["id"],
-                    row["ts"],
-                    row.get("level"),
-                    row.get("message"),
-                    _to_mysql_dt(row.get("created_at")) or now,
-                    now,
-                )
-                for row in rows
-            ],
-        )
-    else:
-        return 0
-    return int(cursor.rowcount)

@@ -32,7 +32,7 @@ except ModuleNotFoundError:  # 支持直接执行 tools/grid_trading.py
 # 配置区（按你的实际持仓修改）
 # ============================================================
 
-CONFIGS = {
+DEFAULT_CONFIGS = {
     "513180": {
         "name": "恒生科技ETF",
         "base_price": "0.609",          # 动态基准价（2026-08-10 东方财富核对）
@@ -270,7 +270,6 @@ RISK_TOTAL_LOSS_EXIT = Decimal("15")   # 总亏损清仓线（%）
 # ============================================================
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-TRIGGER_FILE = os.path.join(SCRIPT_DIR, "..", "data", "grid_triggers.json")
 VOLUME_FILE = os.path.join(SCRIPT_DIR, "..", "data", "grid_volume_history.json")
 
 # 折溢价阈值
@@ -364,21 +363,142 @@ def calc_grid_levels(cfg):
 
 # --- 持久化 ---
 
-def load_triggers():
-    if not os.path.exists(TRIGGER_FILE):
-        return {}
-    with open(TRIGGER_FILE, "r") as f:
-        return json.load(f)
-
-
-def save_triggers(data):
-    os.makedirs(os.path.dirname(TRIGGER_FILE), exist_ok=True)
-    with open(TRIGGER_FILE, "w") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
+def _import_db():
+    """加载数据库访问层（momentum-dashboard/db.py），支持从 tools/ 直接运行。"""
+    try:
+        import db as _db
+        return _db
+    except ImportError:
+        pass
+    import importlib.util
+    path = os.path.join(SCRIPT_DIR, "..", "momentum-dashboard", "db.py")
+    spec = importlib.util.spec_from_file_location(
+        "momentum_db", os.path.abspath(path)
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    sys.modules["momentum_db"] = module
+    return module
 
 
 def get_triggers_for(etf_code):
-    return load_triggers().get(etf_code, [])
+    """从数据库读取该标的全部触发记录（grid_triggers 表，文件已废弃）。"""
+    db = _import_db()
+    records = []
+    for row in db.grid_triggers_for_code(etf_code):
+        trigger_date = str(row.get("trigger_date") or "")
+        date_part, _, time_part = trigger_date.partition(" ")
+        records.append({
+            "date": date_part,
+            "time": time_part,
+            "action": row.get("action"),
+            "type": row.get("trigger_type") or "grid",
+            "price": row.get("price"),
+            "shares": row.get("shares"),
+            "amount": row.get("amount"),
+            "base_price_before": row.get("base_price_before"),
+            "base_price_after": row.get("base_price_after"),
+            "name": row.get("name"),
+            "source": row.get("source"),
+        })
+    return records
+
+
+def load_triggers():
+    """从数据库读取全部标的的触发记录 {code: [records]}。"""
+    db = _import_db()
+    rows = db.query_grid_triggers(limit=5000)
+    codes = {str(row.get("code")) for row in rows if row.get("code")}
+    return {code: get_triggers_for(code) for code in sorted(codes)}
+
+
+def save_triggers(data):
+    """把 {code: [records]} 写入数据库（幂等，重复自动跳过）。"""
+    db = _import_db()
+    for code, records in (data or {}).items():
+        for record in records or []:
+            try:
+                db.append_grid_trigger(
+                    code,
+                    record.get("name") or None,
+                    str(record.get("date") or ""),
+                    str(record.get("time") or ""),
+                    record.get("action"),
+                    float(record.get("price")),
+                    int(record.get("shares") or 0),
+                    trigger_type=str(record.get("type") or "grid"),
+                    amount=record.get("amount"),
+                    base_price_before=record.get("base_price_before"),
+                    base_price_after=record.get("base_price_after"),
+                    source=str(record.get("source") or "manual"),
+                )
+            except Exception:
+                continue
+
+
+def _cfg_num(value):
+    """把 DB 行数值安全转 Decimal（None/空 → None）。"""
+    if value is None or value == "":
+        return None
+    try:
+        return Decimal(str(value))
+    except Exception:
+        return None
+
+
+def _config_from_db_row(row: dict) -> dict:
+    """把 grid_configs 表行映射为 CLI 配置字典（与 DEFAULT_CONFIGS 同构）。"""
+    code = str(row.get("code") or "").strip()
+    base = _cfg_num(row.get("base_price"))
+    up = _cfg_num(row.get("spacing_up_pct"))
+    down = _cfg_num(row.get("spacing_down_pct"))
+    low = _cfg_num(row.get("price_low"))
+    base_str = str(base) if base is not None else "0"
+    up_str = str(up) if up is not None else "0"
+    down_str = str(down) if down is not None else "0"
+    return {
+        "code": code,
+        "name": str(row.get("name") or code),
+        "base_price": base_str,
+        "cost_price": base_str,
+        "grid_spacing_pct": up_str,
+        "grid_spacing_up_pct": up_str,
+        "grid_spacing_down_pct": down_str,
+        "levels_above": int(row.get("levels_above") or 0),
+        "levels_below": int(row.get("levels_below") or 0),
+        "shares_per_grid": int(row.get("shares_per_grid") or 0),
+        "base_position": int(row.get("base_position") or 0),
+        "grid_position": int(row.get("grid_position") or 0),
+        "max_position": int(row.get("max_position") or 0),
+        "stop_loss_price": str(low) if low is not None else "0",
+        "note": row.get("note"),
+        "strategy_type": row.get("strategy_type") or "网格交易",
+    }
+
+
+def _build_configs_from_db() -> dict:
+    """从数据库 grid_configs 表加载全部网格配置；表为空/不可达时回退默认。"""
+    try:
+        rows = _import_db().load_grid_configs()
+    except Exception:
+        rows = []
+    configs = {}
+    for row in rows or []:
+        cfg = _config_from_db_row(row)
+        if cfg["code"]:
+            configs[cfg["code"]] = cfg
+    return configs or dict(DEFAULT_CONFIGS)
+
+
+def reload_configs() -> dict:
+    """重新从数据库加载配置（配置保存后调用，保持内存与表一致）。"""
+    global CONFIGS
+    CONFIGS = _build_configs_from_db()
+    return CONFIGS
+
+
+# 网格配置统一以数据库 grid_configs 表为准（DEFAULT_CONFIGS 仅作空表兜底）
+CONFIGS = _build_configs_from_db()
 
 
 # --- 成交量历史（用于量价分析） ---
@@ -1707,6 +1827,79 @@ def _calc_bollinger(closes, period=20, std_mult=2.0):
     return ma, upper, lower, width_pct
 
 
+def _trend_score_at(closes, i):
+    """回测第 i 天的趋势评分（正=震荡有利网格，负=趋势不利网格）。
+
+    与 analyze_trend 同逻辑，但只用 closes[:i+1]（点内历史），无未来函数。
+    历史不足 60 天返回 None（调用方视为「无信号，不暂停」）。
+    """
+    hist = closes[: i + 1]
+    if len(hist) < 60:
+        return None
+    price = hist[-1]
+    ma20 = _calc_ma(hist, 20)
+    ma60 = _calc_ma(hist, 60)
+    _, _, _, bb_width = _calc_bollinger(hist, 20)
+    score = 0
+    if ma20 and ma60:
+        near_ma20 = abs(price - ma20) / price < 0.01
+        if near_ma20:
+            score += 2 if (bb_width and bb_width < 8) else 1
+        elif price > ma20 > ma60:
+            score -= 1
+        elif price < ma20 < ma60:
+            score -= 2
+        elif abs(price - ma20) / price < 0.02:
+            score += 2
+        else:
+            score += 1
+    if bb_width is not None:
+        if bb_width < 4:
+            score += 3
+        elif bb_width < 8:
+            score += 1
+        else:
+            score -= 2
+    return score
+
+
+def _er_at(closes, i, lookback=20):
+    """第 i 天的 Kaufman 效率比率（ER），用截至 i-1（昨日）收盘的窗口，无未来函数。
+
+    ER = |N日净涨跌| / Σ|逐日涨跌| ∈ [0,1]。ER→1 单边趋势（网格穿层亏损），
+    ER→0 震荡（网格最佳环境）。与 _trend_score_at 不同：ER 度量「单边单调性」，
+    而非「均线方向」，直接对应网格的盈亏机制。窗口不足返回 None（调用方视为无信号）。
+    """
+    end = i - 1
+    start = end - lookback
+    if start < 0:
+        return None
+    window = closes[start:end + 1]
+    if len(window) < 2:
+        return None
+    net = abs(window[-1] - window[0])
+    path = sum(abs(window[j] - window[j - 1]) for j in range(1, len(window)))
+    if path == 0:
+        return 0.0
+    return net / path
+
+
+def _down_trend_at(closes, i, fast=20, slow=60):
+    """第 i 天空头排列判断（MA_fast < MA_slow），用截至 i-1（昨日）收盘的历史，无未来函数。
+
+    方向性信号：只识别下跌趋势（而非 ER 的对称「单边」），用于「降底仓」——
+    下跌时清底仓避损，上涨时保留底仓吃 beta。历史不足返回 None（无信号）。
+    """
+    hist = closes[:i]
+    if len(hist) < slow:
+        return None
+    ma_fast = _calc_ma(hist, fast)
+    ma_slow = _calc_ma(hist, slow)
+    if ma_fast is None or ma_slow is None:
+        return None
+    return ma_fast < ma_slow
+
+
 def cmd_performance(etf_code=None):
     """高级绩效分析：Sharpe/Sortino/Calmar/MaxDD/胜率/盈亏比。
 
@@ -1939,10 +2132,11 @@ def cmd_tune(etf_code=None):
 def _execute_triggers_at_price(bp, price, cash, pos, fifo_queue, trades, date_str,
                                 max_position, base_shares, spg, sp_up, sp_down,
                                 la, lb, board_lot, comm_rate, slip_rate,
-                                triggered_buy, triggered_sell):
+                                triggered_buy, triggered_sell, t_plus=0):
     """在一个价位点逐层执行所有网格触发。
 
     每触发一层立即更新 bp，重新计算档次后继续判断。
+    t_plus: 0=T+0（当天买入可当天卖），1=T+1（当天买入份额最早次日卖出）。
     返回 (bp, cash, pos, fifo_queue, triggered_buy, triggered_sell)。
     """
     while True:
@@ -1952,6 +2146,12 @@ def _execute_triggers_at_price(bp, price, cash, pos, fifo_queue, trades, date_st
         trig = bp * (1 + sp_up / 100)
         if price >= trig and pos > base_shares:
             sell_shares = min(spg, pos - base_shares)
+            if t_plus == 1:
+                # T+1：当天买入的份额当天不能卖，只卖历史买入的网格仓
+                sellable = sum(
+                    lot["shares"] for lot in fifo_queue if lot.get("date", "") < date_str
+                )
+                sell_shares = min(sell_shares, sellable)
             sell_shares = (sell_shares // board_lot) * board_lot
             if sell_shares >= board_lot:
                 sell_fill = trig * (1 - slip_rate)
@@ -2018,7 +2218,7 @@ def _execute_triggers_at_price(bp, price, cash, pos, fifo_queue, trades, date_st
                     triggered_buy += 1
                     fifo_queue.append({
                         "price": buy_fill, "shares": buy_shares,
-                        "cost": buy_cost,
+                        "cost": buy_cost, "date": date_str,
                     })
                     trades.append({
                         "date": date_str, "action": "buy",
@@ -2040,10 +2240,11 @@ def _run_intraday_path(bp_start, cash_start, pos_start, fifo_start,
                         path_sequence, date_str,
                         max_position, base_shares, spg, sp_up, sp_down,
                         la, lb, board_lot, comm_rate, slip_rate,
-                        triggered_buy_start, triggered_sell_start):
+                        triggered_buy_start, triggered_sell_start, t_plus=0):
     """模拟一条日内路径，返回该路径的最终状态和局部交易记录。
 
     path_sequence: [(label, price), ...]  如 [('open', 1.01), ('high', 1.02), ...]
+    t_plus: 0=T+0，1=T+1（当天买入份额当天不能卖）。
     返回 (bp, cash, pos, fifo_queue, local_trades, triggered_buy, triggered_sell)
     """
     bp = bp_start
@@ -2059,7 +2260,7 @@ def _run_intraday_path(bp_start, cash_start, pos_start, fifo_start,
             bp, price, cash, pos, fifo, local_trades, date_str,
             max_position, base_shares, spg, sp_up, sp_down,
             la, lb, board_lot, comm_rate, slip_rate,
-            t_buy, t_sell)
+            t_buy, t_sell, t_plus)
 
     return bp, cash, pos, fifo, local_trades, t_buy, t_sell
 
@@ -2076,6 +2277,12 @@ def run_grid_backtest(
     base_ratio=0.6,
     stop_loss_ratio=0.75,
     execution=None,
+    t_plus=0,
+    trend_pause_threshold=None,
+    er_reduce_threshold=None,
+    er_lookback=20,
+    base_reduce_ratio=1.0,
+    ma_down_reduce=False,
 ):
     """历史 K 线回测核心函数 — 无 CLI 依赖，可被测试直接调用。
 
@@ -2090,6 +2297,18 @@ def run_grid_backtest(
         base_ratio: 底仓占初始仓位比例（0~1）
         stop_loss_ratio: 止损比例（0 表示不启用止损）
         execution: ExecutionConfig 实例（None 则用默认）
+        t_plus: 交易制度，0=T+0（当天买入可当天卖），1=T+1（当天买入次日可卖）。
+                默认 0 保持向后兼容；A股股票 ETF/LOF 应传 1。
+        trend_pause_threshold: 趋势过滤阈值。None=不启用（无脑网格）。
+                当日趋势评分 < 阈值时暂停网格订单（冻结网格层，底仓继续持有）。
+                评分正=震荡有利、负=趋势不利（见 _trend_score_at）。
+        er_reduce_threshold: ER 效率比率阈值。None=不启用。当日 ER >= 阈值（单边趋势）
+                时把底仓降至 base_shares*(1-base_reduce_ratio)，ER < 阈值（震荡）恢复全量底仓。
+                干预对象是底仓（治本），而非暂停网格订单（A3 已证暂停有害）。
+        er_lookback: ER 回看窗（交易日），默认 20。
+        base_reduce_ratio: 单边趋势时底仓削减比例，1.0=清空底仓，0.5=减半。
+        ma_down_reduce: True 时，空头排列（MA20<MA60）降底仓，否则恢复。与 er_reduce_threshold
+                互斥二选一用（都设则任一触发即降）。方向性信号，避免对称 ER 在上涨趋势里误卖底仓。
 
     返回 dict，包含 equity_curve、trades、各项绩效指标。
     支持 OHLC 日内路径模拟：用两条路径 (open→high→low→close 和
@@ -2168,7 +2387,7 @@ def run_grid_backtest(
     if grid_shares > 0:
         fifo_queue.append({
             "price": fill_price_entry, "shares": grid_shares,
-            "cost": initial_lot_cost
+            "cost": initial_lot_cost, "date": dates[0],
         })
 
     # 记录初始建仓
@@ -2184,6 +2403,12 @@ def run_grid_backtest(
     triggered_buy = 0
     triggered_sell = 0
     ambiguous_bar_count = 0
+    paused_days = 0
+
+    # 底仓动态管理（ER 趋势信号）：ER 高（单边趋势）时降底仓，低（震荡）时恢复。
+    base_held = base_shares            # 当前实际持有的底仓股数
+    base_cost = base_shares * cost_per_share  # 底仓成本基准（含建仓佣金，滑点在 fill_price 内）
+    base_reduce_days = 0               # 底仓处于削减状态的天数
 
     # 首日已在 open 建仓，继续模拟 open 之后的盘中路径。
     first_path = [("high", _highs[0]), ("low", _lows[0]), ("close", closes[0])]
@@ -2191,7 +2416,7 @@ def run_grid_backtest(
         bp, cash, pos, fifo_queue, first_path, dates[0],
         max_position, base_shares, spg, sp_up, sp_down,
         la, lb, board_lot, comm_rate, slip_rate,
-        triggered_buy, triggered_sell,
+        triggered_buy, triggered_sell, t_plus,
     )
     trades.extend(first_trades)
     equity_curve.append({
@@ -2218,8 +2443,8 @@ def run_grid_backtest(
             else:
                 stop_fill = stop_loss_price
 
-            # 只清网格仓，保留底仓
-            grid_current = max(0, pos - base_shares)
+            # 只清网格仓，保留当前底仓（可能已被 ER 削减）
+            grid_current = max(0, pos - base_held)
             if grid_current > 0:
                 # 卖出滑点
                 stop_actual = stop_fill * (1 - slip_rate)
@@ -2261,10 +2486,84 @@ def run_grid_backtest(
             })
             break
 
+        # --- 趋势信号：单边趋势(ER)或空头排列(MA)时降底仓（清掉底仓方向性风险），否则恢复 ---
+        if er_reduce_threshold is not None or ma_down_reduce:
+            reduce_now = False
+            if er_reduce_threshold is not None:
+                er = _er_at(closes, i, er_lookback)
+                if er is not None and er >= er_reduce_threshold:
+                    reduce_now = True
+            if ma_down_reduce and _down_trend_at(closes, i):
+                reduce_now = True
+            target_base = (
+                base_shares if not reduce_now
+                else base_shares * (1.0 - base_reduce_ratio)
+            )
+            target_base = (int(target_base) // board_lot) * board_lot
+            if base_held > target_base:
+                # 卖出底仓至目标（按当日开盘价，含佣金+滑点）
+                sell_shares = base_held - target_base
+                sell_fill = day_open * (1 - slip_rate)
+                sell_gross = sell_fill * sell_shares
+                sell_comm = sell_gross * comm_rate
+                sell_net = sell_gross - sell_comm
+                sell_slip = (day_open - sell_fill) * sell_shares
+                cost_of_sold = base_cost * sell_shares / base_held if base_held > 0 else 0.0
+                cash += sell_net
+                pos -= sell_shares
+                base_cost -= cost_of_sold
+                base_held -= sell_shares
+                trades.append({
+                    "date": date_str, "action": "base_sell",
+                    "price": day_open, "fill_price": sell_fill,
+                    "shares": sell_shares,
+                    "commission": sell_comm, "slippage": sell_slip,
+                    "realized_pnl": sell_net - cost_of_sold,
+                    "cash_after": cash, "pos_after": pos,
+                })
+            elif base_held < target_base:
+                # 买回底仓至目标
+                buy_shares = target_base - base_held
+                buy_fill = day_open * (1 + slip_rate)
+                buy_gross = buy_fill * buy_shares
+                buy_comm = buy_gross * comm_rate
+                buy_cost = buy_gross + buy_comm
+                if buy_cost <= cash:
+                    buy_slip = (buy_fill - day_open) * buy_shares
+                    cash -= buy_cost
+                    pos += buy_shares
+                    base_cost += buy_cost
+                    base_held += buy_shares
+                    trades.append({
+                        "date": date_str, "action": "base_buy",
+                        "price": day_open, "fill_price": buy_fill,
+                        "shares": buy_shares,
+                        "commission": buy_comm, "slippage": buy_slip,
+                        "cash_after": cash, "pos_after": pos,
+                    })
+            if base_held < base_shares:
+                base_reduce_days += 1
+
+        # --- 趋势过滤：当日评分低于阈值 → 暂停网格订单（冻结网格层，底仓继续持有）---
+        if trend_pause_threshold is not None:
+            ts = _trend_score_at(closes, i)
+            if ts is not None and ts < trend_pause_threshold:
+                paused_days += 1
+                equity = cash + pos * close
+                equity_curve.append({
+                    "date": date_str, "equity": equity,
+                    "cash": cash, "position": pos, "close": close,
+                })
+                continue
+
+        # --- 当前底仓地板与仓位上限（底仓可能已被 ER 削减） ---
+        cur_base = base_held
+        cur_max_position = base_held + grid_shares + spg * lb
+
         # --- 检查是否有双向触发潜力 ---
-        has_sell_potential = pos > base_shares and any(
+        has_sell_potential = pos > cur_base and any(
             day_high >= bp * (1 + sp_up / 100) ** j for j in range(1, la + 1))
-        has_buy_potential = cash > 0 and pos < max_position and any(
+        has_buy_potential = cash > 0 and pos < cur_max_position and any(
             day_low <= bp * (1 - sp_down / 100) ** j for j in range(1, lb + 1))
         needs_two_paths = has_sell_potential and has_buy_potential
 
@@ -2286,9 +2585,9 @@ def run_grid_backtest(
         bp_a, cash_a, pos_a, fifo_a, trades_a, tb_a, ts_a = _run_intraday_path(
             bp_snap, cash_snap, pos_snap, fifo_snap,
             path_a, date_str,
-            max_position, base_shares, spg, sp_up, sp_down,
+            cur_max_position, cur_base, spg, sp_up, sp_down,
             la, lb, board_lot, comm_rate, slip_rate,
-            tb_snap, ts_snap)
+            tb_snap, ts_snap, t_plus)
 
         equity_a = cash_a + pos_a * close
 
@@ -2297,9 +2596,9 @@ def run_grid_backtest(
             bp_b, cash_b, pos_b, fifo_b, trades_b, tb_b, ts_b = _run_intraday_path(
                 bp_snap, cash_snap, pos_snap, fifo_snap,
                 path_b, date_str,
-                max_position, base_shares, spg, sp_up, sp_down,
+                cur_max_position, cur_base, spg, sp_up, sp_down,
                 la, lb, board_lot, comm_rate, slip_rate,
-                tb_snap, ts_snap)
+                tb_snap, ts_snap, t_plus)
 
             equity_b = cash_b + pos_b * close
 
@@ -2359,6 +2658,14 @@ def run_grid_backtest(
             "total_bar_count": n,
             "calmar": 0.0, "grade": "F", "alpha_pct": 0.0,
             "total_trading_days": 0, "years": 0.0,
+            "paused_days": paused_days,
+            "trend_pause_threshold": trend_pause_threshold,
+            "base_reduce_days": base_reduce_days,
+            "er_reduce_threshold": er_reduce_threshold,
+            "er_lookback": er_lookback,
+            "base_reduce_ratio": base_reduce_ratio,
+            "ma_down_reduce": ma_down_reduce,
+            "final_base_held": base_held,
             "execution_config": execution,
         }
 
@@ -2501,6 +2808,14 @@ def run_grid_backtest(
         "alpha_pct": alpha_pct,
         "total_trading_days": total_days,
         "years": years,
+        "paused_days": paused_days,
+        "trend_pause_threshold": trend_pause_threshold,
+        "base_reduce_days": base_reduce_days,
+        "er_reduce_threshold": er_reduce_threshold,
+        "er_lookback": er_lookback,
+        "base_reduce_ratio": base_reduce_ratio,
+        "ma_down_reduce": ma_down_reduce,
+        "final_base_held": base_held,
         "execution_config": execution,
     }
 
@@ -2524,6 +2839,7 @@ def cmd_backtest(etf_code=None, start_date=None, end_date=None,
 
     cfg = CONFIGS.get(etf_code, {})
     name = cfg.get("name", etf_code)
+    t_plus = 0 if _is_t0(etf_code) else 1
 
     # --- 参数解析 ---
     sp_up = float(override_spacing if override_spacing else
@@ -2565,6 +2881,8 @@ def cmd_backtest(etf_code=None, start_date=None, end_date=None,
     execution = ExecutionConfig()
     print(f"\n  🔄 正在回测 {name} ({etf_code})...")
     print(f"     区间: {dates[0]} ~ {dates[-1]} ({len(closes)} 个交易日)")
+    print(f"     交易制度: {'T+0' if t_plus == 0 else 'T+1'}"
+          f"{'（可日内回转）' if t_plus == 0 else '（当日买入次日可卖）'}")
     print(f"     初始资金: ¥{total_capital_val:,.0f}  "
           f"成本率: {float(execution.commission_rate)*10000:.1f}‱  "
           f"滑点: {float(execution.slippage_rate)*10000:.1f}‱")
@@ -2580,6 +2898,7 @@ def cmd_backtest(etf_code=None, start_date=None, end_date=None,
         shares_per_grid=spg,
         total_capital=total_capital_val,
         execution=execution,
+        t_plus=t_plus,
     )
 
     # --- 输出 ---
@@ -2695,6 +3014,7 @@ def cmd_backtest(etf_code=None, start_date=None, end_date=None,
                 "total_trading_days": total_days,
                 "years": round(years, 2),
                 "ohlc_mode": True,
+                "t_plus": t_plus,
                 "ambiguous_bar_count": ambiguous_count,
                 "total_bar_count": total_bars,
                 "grid_params": {
@@ -2803,6 +3123,26 @@ def _fetch_ohlc_data(etf_code, count=1500, as_of=None):
         [bar["high"] for bar in bars],
         [bar["low"] for bar in bars],
     )
+
+
+_T0_CATEGORIES = ("跨境ETF", "商品ETF", "债券ETF", "货币基金")
+
+
+def _is_t0(code: str) -> bool:
+    """判断标的是否支持 T+0（跨境/商品/债券/货币 ETF 可 T+0；A股股票 ETF/LOF 为 T+1）。
+
+    读 data/etf_meta.json 的 category 字段；读不到则默认 T+1（更保守）。
+    """
+    meta_path = os.path.join(SCRIPT_DIR, "..", "data", "etf_meta.json")
+    try:
+        with open(meta_path, encoding="utf-8") as f:
+            meta = json.load(f)
+        for etf in meta.get("etfs") or []:
+            if str(etf.get("code")) == code:
+                return str(etf.get("category")) in _T0_CATEGORIES
+    except Exception:
+        pass
+    return False
 
 
 def analyze_trend(code: str):
@@ -3054,7 +3394,7 @@ def print_help():
   python3 grid_trading.py watch 513180            # 30s 刷新监控
 
 首次使用：编辑脚本顶部 CONFIGS 字典，修改为你的持仓参数。
-触发记录保存在 data/grid_triggers.json
+触发记录存 MySQL grid_triggers 表（grid_triggers.json 已废弃）
 成交量历史保存在 data/grid_volume_history.json
 """)
 
@@ -3086,10 +3426,12 @@ def main():
             # 跳过选项及其值，避免把 6 位数值（如 --capital 100000）误判为 ETF 代码
             index += 1 if token in no_value_options else 2
             continue
-        if token in CONFIGS or (cmd == "quote" and len(token) == 6 and token.isdigit()):
+        if token in CONFIGS or (
+            cmd in ("quote", "backtest") and len(token) == 6 and token.isdigit()
+        ):
             etf = token
         elif len(token) == 6 and token.isdigit():
-            # 6 位数字但不在 CONFIGS 中，非 quote 命令 → 报错
+            # 6 位数字但不在 CONFIGS 中，非 quote/backtest 命令 → 报错
             print(f"未找到配置: {token}")
             print(f"已配置的 ETF: {', '.join(CONFIGS.keys())}")
             print(f"如需添加，请编辑 tools/grid_trading.py 顶部的 CONFIGS 字典")

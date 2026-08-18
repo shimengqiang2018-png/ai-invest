@@ -66,7 +66,27 @@ ETF_POOL = {
     "512880": "证券ETF",
     "512690": "酒ETF",
     "512010": "医药ETF",
+    # 跨境 / 另类
+    "513100": "纳指ETF",
+    "518880": "黄金ETF",
 }
+
+# 用 data/etf_meta.json 的全市场名称补全 ETF_POOL，保证枚举/回测结果里的
+# 组合标签显示标的名字而不是裸代码（新增/动态池标的无需改硬编码映射）。
+try:
+    _META_FILE = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        "data", "etf_meta.json",
+    )
+    if os.path.exists(_META_FILE):
+        with open(_META_FILE, encoding="utf-8") as _meta_f:
+            _meta_data = json.load(_meta_f)
+        for _meta_etf in _meta_data.get("etfs", []):
+            _meta_code = str(_meta_etf.get("code") or "")
+            if _meta_code:
+                ETF_POOL.setdefault(_meta_code, str(_meta_etf.get("name") or _meta_code))
+except Exception:
+    pass  # 元信息缺失时回退到硬编码映射，不影响回测主流程
 
 # 预设ETF池（一键回测）
 PRESET_POOLS = {
@@ -78,6 +98,7 @@ PRESET_POOLS = {
     "ashare":    ("510300,159915,588000,510500", "A股纯宽基 (对比用)"),
     "original":  ("159915,510300,512880,513180,512690,512010,159920,588000", "原始8-ETF池"),
     "all":       ("518880,513100,159915,510300,588000,510050,512880,513180", "全品种大池"),
+    "cifang":    ("161912,161128,513100,159834,161130,159806,161631,515580,159871,512550", "cifang"),
 }
 
 # 货币ETF（持币用，但回测中直接算现金）
@@ -379,6 +400,7 @@ def run_backtest(
 
     # ── 5. 逐日回测循环 ──
     for date in dates_in_range:
+        stop_loss_triggered_today = False
         # 5a. 执行当天到期的 pending order（开盘价成交，含滑点）
         if pending_order and pending_order["exec_date"] == date:
             po = pending_order
@@ -415,7 +437,13 @@ def run_backtest(
                     reason=po["sell"]["reason"],
                 )
                 if entry:
-                    action_label = "卖出(无信号)" if po["sell"]["reason"].startswith("池内无标的") else "卖出"
+                    action_label = (
+                        "止损卖出"
+                        if po["sell"]["reason"].startswith("止损")
+                        else "卖出(无信号)"
+                        if po["sell"]["reason"].startswith("池内无标的")
+                        else "卖出"
+                    )
                     trades.append(_make_trade(entry, action_label))
                     position = None
                     sell_succeeded = True
@@ -477,10 +505,22 @@ def run_backtest(
                             "stop_line": round(stop_line, 4),
                             "loss_pct": round((c / position["entry_fill"] - 1) * 100, 2),
                         })
+                        # 真正执行止损：次日开盘清仓（与实盘 check_stop_loss 口径一致）。
+                        if pending_order is None:
+                            exec_date = _next_trading_day(date, [position["code"]])
+                            if exec_date is not None:
+                                pending_order = {
+                                    "signal_date": date,
+                                    "exec_date": exec_date,
+                                    "sell": {
+                                        "reason": f"止损（-{STOP_LOSS_PCT * 100:.0f}%）",
+                                    },
+                                }
+                                stop_loss_triggered_today = True
         daily_nav.append((date, round(nav, 2)))
 
         # 5c. 信号检查日: 评估全量信号，按迟滞规则决策
-        if date in check_dates_set:
+        if date in check_dates_set and not stop_loss_triggered_today:
             signal_config = MomentumConfig(
                 rsrs_period=momentum_period,
                 # 策略规范: 收盘 > MA20（与信号扫描器 momentum_signal 保持一致）

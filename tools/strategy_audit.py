@@ -12,10 +12,12 @@ from datetime import datetime, timedelta
 from collections import defaultdict
 
 try:
-    from tools.momentum_etf_backtest import calc_rsrs, run_backtest
+    from tools.momentum_etf_backtest import run_backtest
+    from tools.momentum_core import rsrs_factor
 except ModuleNotFoundError:  # 支持直接执行 tools/strategy_audit.py
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-    from momentum_etf_backtest import calc_rsrs, run_backtest
+    from momentum_etf_backtest import run_backtest
+    from momentum_core import rsrs_factor
 
 POOL = {"518880": "黄金ETF", "513100": "纳指ETF", "159915": "创业板ETF", "159920": "恒生ETF"}
 CACHE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "data", "cache")
@@ -208,14 +210,14 @@ def compute_ic_ir(klines, pool, period=20):
                 target_index = indices[code][target_date]
                 if signal_index < period or target_index <= signal_index:
                     continue
-                _score, slope_pct, r_squared = calc_rsrs(
+                raw_score, _slope_pct, _r_squared = rsrs_factor(
                     bars, signal_index, period
                 )
                 current_close = float(bars[signal_index]["close"])
                 target_close = float(bars[target_index]["close"])
                 if current_close <= 0:
                     continue
-                scores.append(slope_pct * r_squared)
+                scores.append(raw_score)
                 returns.append(target_close / current_close - 1)
             if len(scores) < min_assets:
                 continue
@@ -351,7 +353,7 @@ def stress_scenarios(daily_nav, market_data):
     }
 
 
-def audit_backtest_result(result, pool):
+def audit_backtest_result(result, pool, momentum_period=25):
     """只消费一次回测的结构化结果，不重新取数或重放交易。"""
     market_data = result.get("market_data", {})
     klines = {
@@ -362,7 +364,7 @@ def audit_backtest_result(result, pool):
     return {
         "period": dict(result.get("period", {})),
         "daily_metrics": compute_daily_metrics(daily_nav),
-        "ic_ir": compute_ic_ir(klines, pool) if klines else {},
+        "ic_ir": compute_ic_ir(klines, pool, period=momentum_period) if klines else {},
         "stress_test": stress_scenarios(daily_nav, klines) if klines else {},
     }
 

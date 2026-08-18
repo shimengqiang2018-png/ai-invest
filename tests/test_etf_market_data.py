@@ -13,9 +13,11 @@ from tools.etf_market_data import (
     MarketDataManifest,
     MarketDataQualityError,
     MarketDataSeries,
+    _fetch_ths_full,
     _is_cache_fresh,
     _merge_incremental,
     _parse_sina,
+    _parse_ths,
     _should_refresh_online,
     _throttle,
     load_etf_series,
@@ -625,6 +627,204 @@ class MarketDataContractTests(unittest.TestCase):
         bars = _parse_sina(payload, "sh518880")
         self.assertEqual(500000.0, bars[0]["volume"])
         self.assertEqual(300000.0, bars[1]["volume"])
+
+    # ══════════════════════════════════════════════════════════════════
+    # THS (同花顺) source tests
+    # ══════════════════════════════════════════════════════════════════
+
+    def _ths_payload(self, start, *rows):
+        """Build THS JS-wrapped payload from (date8, open, high, low, close, volume_shares).
+
+        Matches the real endpoint shape:
+        quotebridge_v6_line_...({"start":"20120528","total":"N",
+        "data":"YYYYMMDD,o,h,l,c,v,amount,turnover,,,0","marketType":...})
+        """
+        data_rows = ";".join(
+            f"{d},{o},{h},{l},{c},{v},0,0,,,0" for d, o, h, l, c, v in rows
+        )
+        return (
+            'quotebridge_v6_line_hs_513100_01_last({"num":140,"start":"'
+            f'{start}","total":"{len(rows)}","name":"513100",'
+            f'"data":"{data_rows}","marketType":"","issuePrice":"1.0"}})'
+        )
+
+    def test_parse_ths_ohlc_order_and_volume_normalisation(self):
+        """THS payload: OHL**C** order (≠ Tencent), volume 股→手, date8→date."""
+        payload = self._ths_payload(
+            "20220110",
+            ("20220110", "1.000", "1.100", "0.900", "1.050", "50000000"),
+            ("20220111", "1.050", "1.200", "1.000", "1.150", "30000000"),
+        )
+        bars = _parse_ths(payload, "513100")
+        self.assertEqual(2, len(bars))
+        self.assertEqual("2022-01-10", bars[0]["date"])
+        self.assertEqual(1.000, bars[0]["open"])
+        self.assertEqual(1.100, bars[0]["high"])
+        self.assertEqual(0.900, bars[0]["low"])
+        self.assertEqual(1.050, bars[0]["close"])
+        self.assertEqual(500000.0, bars[0]["volume"])  # 股→手
+        self.assertEqual("2022-01-11", bars[1]["date"])
+
+    def test_parse_ths_without_markettype_falls_back(self):
+        """Payload missing trailing marketType metadata still parses (data 段保底正则)."""
+        payload = (
+            'quotebridge_v6_line_hs_513100_01_2022({"num":2,"start":"20220110",'
+            '"data":"20220110,1.0,1.1,0.9,1.05,50000000,0,0,,,0"})'
+        )
+        bars = _parse_ths(payload, "513100")
+        self.assertEqual(1, len(bars))
+        self.assertEqual(500000.0, bars[0]["volume"])
+
+    def test_fetch_ths_full_pages_years_and_sorts(self):
+        """THS full history pages year files, merges, de-dupes, sorts ascending."""
+        def transport(url):
+            if "d.10jqka.com.cn" in url:
+                if url.endswith("/2022.js"):
+                    return self._ths_payload(
+                        "20220101",
+                        ("20220103", "1.0", "1.1", "0.9", "1.05", "50000000"),
+                        ("20220104", "1.05", "1.2", "1.0", "1.15", "30000000"),
+                    )
+                if url.endswith("/2023.js"):
+                    return self._ths_payload(
+                        "20220101",
+                        ("20230103", "1.1", "1.2", "1.0", "1.15", "50000000"),
+                        ("20230104", "1.15", "1.3", "1.1", "1.25", "30000000"),
+                    )
+                return self._ths_payload("20220101")  # 其他年份/空 data → 解析抛异常被跳过
+            raise ConnectionError(f"unexpected url: {url}")
+
+        bars = _fetch_ths_full("sh513100", transport)
+        self.assertEqual(4, len(bars))
+        self.assertEqual("2022-01-03", bars[0]["date"])
+        self.assertEqual("2023-01-04", bars[-1]["date"])
+
+    def test_load_etf_series_ths_primary_cross_verified(self):
+        """THS 主源成功，腾讯参考源交叉验证通过 → source=ths, verified."""
+        def transport(url):
+            if "d.10jqka.com.cn" in url:
+                return self._ths_payload(
+                    "20220110",
+                    ("20220110", "0.997", "1.017", "0.993", "1.009", "120000000"),
+                    ("20220111", "1.009", "1.021", "1.001", "1.015", "118000000"),
+                    ("20220112", "1.015", "1.030", "1.010", "1.020", "116000000"),
+                    ("20220113", "1.020", "1.040", "1.015", "1.030", "114000000"),
+                )
+            if "web.ifzq.gtimg.cn" in url:
+                return self._tencent_payload(
+                    ("2022-01-10", "0.997", "1.009", "1.017", "0.993", "1200000"),
+                    ("2022-01-11", "1.009", "1.015", "1.021", "1.001", "1180000"),
+                    ("2022-01-12", "1.015", "1.020", "1.030", "1.010", "1160000"),
+                    ("2022-01-13", "1.020", "1.030", "1.040", "1.015", "1140000"),
+                )
+            if "push2his.eastmoney.com" in url:
+                raise ConnectionError("em offline")
+            if "money.finance.sina.com.cn" in url:
+                return self._sina_rows(
+                    ("2022-01-10", "0.997", "1.009", "1.017", "0.993", "120000000"),
+                )
+            return {}
+
+        with tempfile.TemporaryDirectory() as directory:
+            series = load_etf_series(
+                "513100", count=4, cache_dir=directory, transport=transport
+            )
+        self.assertEqual("ths", series.manifest.source)
+        self.assertTrue(series.manifest.adjustment_verified)
+        self.assertEqual("tencent_qfqday", series.manifest.verification_source)
+
+    def test_load_etf_series_ths_provider_declared_when_reference_unavailable(self):
+        """腾讯参考源不可用 → THS 降级 provider_declared，不抛异常."""
+        def transport(url):
+            if "d.10jqka.com.cn" in url:
+                return self._ths_payload(
+                    "20220110",
+                    ("20220110", "0.997", "1.017", "0.993", "1.009", "120000000"),
+                    ("20220111", "1.009", "1.021", "1.001", "1.015", "118000000"),
+                )
+            if "web.ifzq.gtimg.cn" in url:
+                return {"data": {"sh513100": {"qfqday": []}}}
+            if "push2his.eastmoney.com" in url:
+                raise ConnectionError("em offline")
+            if "money.finance.sina.com.cn" in url:
+                return self._sina_rows(
+                    ("2022-01-10", "0.997", "1.009", "1.017", "0.993", "120000000"),
+                )
+            return {}
+
+        with tempfile.TemporaryDirectory() as directory:
+            series = load_etf_series(
+                "513100", count=2, cache_dir=directory, transport=transport
+            )
+        self.assertEqual("ths", series.manifest.source)
+        self.assertFalse(series.manifest.adjustment_verified)
+        self.assertEqual("provider_declared_qfqday", series.manifest.verification_source)
+
+    def test_load_etf_series_ths_fallback_to_eastmoney(self):
+        """THS 主源不可用 → 回退东财 fqt=1 主源."""
+        def transport(url):
+            if "d.10jqka.com.cn" in url:
+                raise ConnectionError("ths offline")
+            if "push2his.eastmoney.com" in url:
+                return self._em_payload(
+                    ("2022-01-10", "0.997", "1.009", "1.017", "0.993", "1200000"),
+                    ("2022-01-11", "1.009", "1.015", "1.021", "1.001", "1180000"),
+                    ("2022-01-12", "1.015", "1.020", "1.030", "1.010", "1160000"),
+                    ("2022-01-13", "1.020", "1.030", "1.040", "1.015", "1140000"),
+                )
+            if "web.ifzq.gtimg.cn" in url:
+                return self._tencent_payload(
+                    ("2022-01-10", "0.997", "1.009", "1.017", "0.993", "1200000"),
+                    ("2022-01-11", "1.009", "1.015", "1.021", "1.001", "1180000"),
+                    ("2022-01-12", "1.015", "1.020", "1.030", "1.010", "1160000"),
+                    ("2022-01-13", "1.020", "1.030", "1.040", "1.015", "1140000"),
+                )
+            if "money.finance.sina.com.cn" in url:
+                return self._sina_rows(
+                    ("2022-01-10", "0.997", "1.009", "1.017", "0.993", "120000000"),
+                )
+            return {}
+
+        with tempfile.TemporaryDirectory() as directory:
+            series = load_etf_series(
+                "513100", count=4, cache_dir=directory, transport=transport
+            )
+        self.assertEqual("eastmoney", series.manifest.source)
+        self.assertTrue(series.manifest.adjustment_verified)
+
+    def test_source_order_env_skips_ths_when_absent(self):
+        """ETF_DATA_SOURCE_ORDER 不含 ths 时，同花顺完全不发起请求（可切换验证）."""
+        import os
+
+        ths_called = []
+
+        def transport(url):
+            if "d.10jqka.com.cn" in url:
+                ths_called.append(url)
+                raise ConnectionError("ths should not be called")
+            if "push2his.eastmoney.com" in url:
+                return self._em_payload(
+                    ("2022-01-10", "0.997", "1.009", "1.017", "0.993", "1200000"),
+                    ("2022-01-11", "1.009", "1.015", "1.021", "1.001", "1180000"),
+                    ("2022-01-12", "1.015", "1.020", "1.030", "1.010", "1160000"),
+                    ("2022-01-13", "1.020", "1.030", "1.040", "1.015", "1140000"),
+                )
+            if "web.ifzq.gtimg.cn" in url:
+                return self._tencent_payload(
+                    ("2022-01-10", "0.997", "1.009", "1.017", "0.993", "1200000"),
+                    ("2022-01-11", "1.009", "1.015", "1.021", "1.001", "1180000"),
+                    ("2022-01-12", "1.015", "1.020", "1.030", "1.010", "1160000"),
+                    ("2022-01-13", "1.020", "1.030", "1.040", "1.015", "1140000"),
+                )
+            return {}
+
+        with patch.dict(os.environ, {"ETF_DATA_SOURCE_ORDER": "eastmoney,tencent"}):
+            with tempfile.TemporaryDirectory() as directory:
+                series = load_etf_series(
+                    "513100", count=4, cache_dir=directory, transport=transport
+                )
+        self.assertEqual("eastmoney", series.manifest.source)
+        self.assertEqual([], ths_called, "THS 不应被请求")
 
     # ══════════════════════════════════════════════════════════════════
     # Incremental cache tests

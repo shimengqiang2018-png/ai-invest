@@ -61,10 +61,10 @@ ETF_DATA_OFFLINE=1 python3 tools/momentum_signal.py --pool 518880,513100,159915,
 |------|------|-----------|
 | 总览 | 动量状态、RSRS 目标、风险指标、网格分组、操作建议、信号 Top4、组合速览 | `tools/strategy_monitor.py --json` + `data/positions_*.json` |
 | 信号扫描 | 五条件明细（RSRS/MA20/波动/量能/RSI）、信号强度、轮动决策、点击行查看 K 线（MA20/MA60） | `tools/momentum_signal.py --json` |
-| 网格 | 网格标的趋势分析（评分/BB/MA/判断）、买卖触发价 vs 实时价、触发记录、网格参数自动寻优 | `tools/grid_trading.py` + `data/grid_triggers.json` |
+| 网格 | 网格标的趋势分析（评分/BB/MA/判断）、买卖触发价 vs 实时价、触发记录、网格参数自动寻优 | `tools/grid_trading.py` + MySQL `grid_triggers` 表 |
 | 回测分析 | 收益/风险卡片、净值曲线、枚举组合 Top10（v3.0 25日/MA20 口径）、最近交易 | `tools/momentum_etf_backtest.py --json` + `data/enum_backtest_veteran_c3_25d.json` |
 | 选品池 | 全市场动量适配评分（可筛选排序）、四维选品推荐、组合相关性矩阵 | `data/etf_backtest_results.json` + `tools/etf_screener.py --json` |
-| 持仓 | 账户汇总、持仓明细、策略归属分组 | `data/positions_latest.json` |
+| 持仓 | 账户汇总、持仓明细、策略归属分组 | MySQL `holdings_current` / `account_summary_current` 表 |
 | 风险审计 | 日频风险指标、RSRS 因子 IC/IR、压力测试情景、VaR 解读 | `tools/strategy_audit.py --json` |
 
 ## 多厂商模型交互
@@ -89,7 +89,8 @@ export ANTHROPIC_API_KEY=sk-ant-xxx  # Claude
 
 服务内置定时调度（`scheduler.py`，`threading.Timer` 链式实现）：
 
-- **调度规则**：每个交易日（周一至周五）09:07-11:57 / 13:07-15:27，每 10 分钟一次；
+- **调度规则**：每个交易日（周一至周五）09:07-11:57、13:07-14:27 每 10 分钟一次；
+  14:30-15:27 每 5 分钟一次（用当天实时价做盘中信号预测）；
 - **任务内容**：刷新信号（联网运行 `strategy_monitor.py` 并更新信号页缓存）
   + 发送监测邮件（复用 `tools/monitor_alert.py` 的 HTML 模板与 QQ SMTP）；
 - **默认启用**，可用 `--no-scheduler` 或环境变量 `MOMENTUM_SCHEDULER=0` 关闭；
@@ -102,8 +103,8 @@ export ANTHROPIC_API_KEY=sk-ant-xxx  # Claude
 两层抽象，方便后续切换底层实现：
 
 - **`db.py` 数据访问层**：唯一包含 SQL / 直接操作数据库的代码层，对外只暴露函数
-  接口。默认后端 MySQL（PyMySQL，`pip install PyMySQL`），连接参数读取 `.env`
-  的 `DB_*`；`DB_BACKEND=sqlite` 可切回 SQLite（测试/离线开发）。
+  接口。仅支持 MySQL（SQLAlchemy + PyMySQL），连接参数读取 `.env` 的 `DB_*`；
+  表结构由 `schema_mysql.sql` 管理，代码不自动建表。
 - **`cache.py` 缓存抽象层**：只暴露 `get / set / cached / delete_expired /
   flush` 与后端切换 `configure()`。默认后端 `db`（走 `db.py` 的 cache 表，即
   MySQL 持久化），另有 `memory` 仅用于单元测试。
@@ -130,8 +131,8 @@ export ANTHROPIC_API_KEY=sk-ant-xxx  # Claude
 mysql -u invest -p ai_invest < momentum-dashboard/schema_mysql.sql
 ```
 
-服务首次连接 MySQL 时自动建表（`CREATE TABLE IF NOT EXISTS`）并把旧 SQLite
-`dashboard.db` 中已有的快照/解析历史/日志/缓存一次性迁入（幂等，仅空表迁移）。
+代码不再自动建表、迁移或种子化默认数据；表结构与初始数据（如
+`momentum_pools` 动量池、`grid_configs` 网格配置）需按上述 DDL 建表后人工维护。
 
 ### 可视化
 
@@ -141,12 +142,12 @@ mysql -u invest -p ai_invest < momentum-dashboard/schema_mysql.sql
 `GET /api/db/table?name=cache&limit=100&offset=0`（白名单表，分页读取）、
 `GET /api/logs?limit=100&level=INFO`。
 
-持仓更新后原 JSON 文件（`data/positions_latest.json` 等）仍保留作为工具兼容与备份。
+持仓全部存 MySQL（`holdings_current` / `positions_snapshots`），不再使用本地 JSON 文件。
 
 ### 网格触发录入
 
-网格页「触发记录录入」支持两种方式，录入后同时写 MySQL `grid_triggers` 表与
-`data/grid_triggers.json`（工具仍从文件计算动态基准价）：
+网格页「触发记录录入」支持两种方式，录入后写 MySQL `grid_triggers` 表
+（`data/grid_triggers.json` 已废弃，触发记录一律从数据库读取）：
 
 - **手动录入**：选择标的/日期/动作/价格/数量，基准价可自动取当前配置，重复记录自动去重；
 - **截图识别**：上传券商成交记录截图，视觉模型直接看图，或本地 OCR + 文本模型
@@ -173,9 +174,8 @@ mysql -u invest -p ai_invest < momentum-dashboard/schema_mysql.sql
    盈亏≈(现价-成本)×股数、盈亏率勾稽、证券市值与持仓合计、总资产与市值+资金、
    **成交记录反推持仓数量/成本交叉校验**（偏差>3% 标记核实），并与腾讯实时行情比对；
 3. **更新**：存在硬错误时拒绝写入；警告项由用户确认后仍可写入；
-   先备份 `positions_latest.json` 再写入，同时按 skill 规范生成
-   `reports/ETF/持仓数据-{YYYYMMDD}.xlsx` 和组合文件 `reports/portfolio-latest.md`，
-   解析历史追加到 `data/ai_parse_history.json`。
+   写入 MySQL（`holdings_current` + `positions_snapshots`），同时按 skill 规范生成
+   `reports/ETF/持仓数据-{YYYYMMDD}.xlsx` 和组合文件 `reports/portfolio-latest.md`。
 
 接口：`POST /api/positions/parse`（上传图片 JSON）、`POST /api/positions/update`（写入）。
 
@@ -212,7 +212,7 @@ echo "DEEPSEEK_API_KEY=sk-xxx" >> .env
 | `/api/positions/update` | `{verified, source}`（POST，核验通过后写入） | 无 |
 | `/api/grid` | 网格标的分析 + 分组 + 触发记录，`refresh=1` | 5 分钟 |
 | `/api/grid/optimize` | `codes=512010,512880`（留空=全部），`capital`，`start`；内置候选（间距 1-5%、层数 3-8、每格金额 200-5000 元折算股数）自动寻优，多标的多线程并行 | 每组 24 小时 |
-| `/api/grid/triggers` | `{code,date,action,price,shares,base_price_before?,base_price_after?}`（POST）手动录入网格触发，写 MySQL + 同步 JSON | 无 |
+| `/api/grid/triggers` | `{code,date,action,price,shares,base_price_before?,base_price_after?}`（POST）手动录入网格触发，写 MySQL `grid_triggers` 表 | 无 |
 | `/api/grid/triggers/parse` | `{provider,images:[{mime,data_b64}]}`（POST）截图识别成交记录（视觉模型或 OCR+模型），返回待核验记录 | 无 |
 | `/api/grid/triggers/confirm` | `{records:[已核验记录]}`（POST）批量确认录入，重复自动去重 | 无 |
 | `/api/db/stats` | 库统计（各表行数 / 大小 / 最新快照） | 无 |
@@ -226,15 +226,20 @@ echo "DEEPSEEK_API_KEY=sk-xxx" >> .env
 
 ```text
 momentum-dashboard/
-├── server.py        # 本地 API 服务（stdlib，封装工具脚本；数据走 db/cache 层）
-├── db.py            # 数据访问层（唯一含 SQL；默认 MySQL，SQLite 供测试）
+├── server.py        # 本地 API 服务（封装工具脚本；数据走 db/cache 层）
+├── bizlog.py        # 业务日志 / 子进程执行器（server.log 按天轮转）
+├── market_tools.py  # 行情 / 技术面工具（K 线、实时报价、指标、网格评分）
+├── db.py            # 数据访问层（唯一含 SQL；SQLAlchemy + MySQL）
 ├── cache.py         # 缓存抽象层（默认 db 后端=MySQL 持久化，可切换 Redis 等）
+├── services/        # 业务服务层（signal / position / grid）
+│   ├── signal_service.py     # 信号池配置、盘中预测、定时任务
+│   ├── position_service.py   # 持仓快照、策略归属
+│   └── grid_service.py       # 网格配置、触发分析、持仓构建
 ├── schema_mysql.sql # MySQL 建表 DDL（id BIGINT 主键 + 创建/更新时间 + 字段注释）
 ├── models.py        # 多厂商模型客户端（OpenAI 兼容 / Anthropic）
 ├── scheduler.py     # 交易时段定时刷新（threading.Timer 链式）
 ├── positions_parser.py  # 持仓截图 AI 解析 + 三级核验 + 落库
 ├── holdings_strategy.json  # 持仓策略归属配置（网格/动量双策略口径）
-├── dashboard.db     # 旧 SQLite 数据库（首次迁移后仅作备份，已 gitignore）
 ├── static/
 │   ├── index.html   # 单页仪表盘
 │   ├── app.js       # 页面逻辑 + Canvas 图表（零依赖）

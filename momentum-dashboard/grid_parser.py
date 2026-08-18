@@ -67,6 +67,54 @@ GRID_OCR_USER = (
 )
 
 
+GRID_CONFIG_SYSTEM = """你是证券账户「网格交易条件单设置」识别助手。
+从券商 App 网格条件单/策略设置截图提取网格交易配置，只输出 JSON，不要解释。
+
+## 字段口径
+- code(6位证券代码)、name(名称)、strategy_type(默认"网格交易")
+- base_price: 基准价（触发条件基准）
+- spacing_up_pct / spacing_down_pct: 上涨卖出间距%、下跌买入间距%（数字，不含%号）
+- price_low / price_high: 价格区间下限/上限
+- order_type_sell / order_type_buy: 卖出/买入委托方式（如"限价即时买一价卖出"）
+- shares_per_grid: 每笔委托数量(份)
+- base_position / max_position: 持仓区间下限(底仓)/上限(份)
+- levels_above / levels_below: 上方卖出层数/下方买入层数（截图可见才提取，否则 null）
+看不清的字段填 null，禁止猜测。
+
+## OCR 规则
+- "每上涨+3.50%卖出每下跌-2.50%买入" → spacing_up_pct=3.5, spacing_down_pct=2.5
+- "价格区间:0.530~0.680" → price_low=0.53, price_high=0.68
+- "委托数量:500份(每笔)" → shares_per_grid=500
+- "持仓区间:8000~18100份" → base_position=8000, max_position=18100
+- 价格/金额保留3位小数；百分号首位丢失、千分位等 OCR 误差需纠错
+
+## 输出 JSON 结构
+{
+  "detected_platforms": [{"image_index": 1, "platform": "eastmoney_grid_config"}],
+  "configs": [
+    {"code":"6位代码","name":"名称","strategy_type":"网格交易","base_price":数字,
+     "spacing_up_pct":数字,"spacing_down_pct":数字,"price_low":数字,"price_high":数字,
+     "order_type_sell":"…","order_type_buy":"…","shares_per_grid":数字,
+     "base_position":数字,"max_position":数字,"levels_above":数字|null,
+     "levels_below":数字|null}
+  ]
+}
+多张截图合并：按 code 去重，同 code 以信息最全者为准。"""
+
+
+GRID_CONFIG_USER = """请识别以下网格条件单配置截图：
+1) 标记每张图的平台与页面类型（detected_platforms）；
+2) 提取所有网格交易配置 configs（字段按系统提示口径）。
+输出严格 JSON。"""
+
+
+GRID_CONFIG_OCR_USER = (
+    "以下是从券商 App 截图 OCR 出的文本（可能有多张图，每张以「图N」开头），"
+    "OCR 可能存在识别误差（百分号首位丢失、千分位、小数点位、"
+    "名称与代码分行等）。请纠错并提取网格交易配置 JSON。\n\n{ocr_text}"
+)
+
+
 def _num(value):
     try:
         return float(value)
@@ -137,6 +185,141 @@ def parse_grid_images(provider: str, images: list[dict], log=None) -> dict:
         if trade.get("action"):
             trade["action"] = str(trade["action"]).strip().lower()
     return parsed
+
+
+def parse_grid_config_images(
+    provider: str, images: list[dict], log=None
+) -> dict:
+    """解析网格条件单配置截图：视觉模型直接看图；文本模型走 本地OCR→结构化。"""
+    def _log(message, level="INFO"):
+        if log is None:
+            return
+        try:
+            log(message, level)
+        except Exception:
+            pass
+
+    cfg = load_config()
+    providers = cfg.get("providers") or {}
+    name = provider or cfg.get("default_provider", "")
+    spec = providers.get(name) or {}
+    vision = bool(spec.get("vision"))
+    if vision:
+        _log(
+            f"GRID-CONFIG-PARSE 通道=视觉模型 {spec.get('model', name)} "
+            f"直接看图 ({len(images)} 张)"
+        )
+        user_text = GRID_CONFIG_USER
+        pipeline = "vision"
+    else:
+        ocr_text = ocr_images(images)
+        _log(
+            f"GRID-CONFIG-PARSE 通道=本地OCR+文本模型 "
+            f"{spec.get('model', name)}，OCR 文本 {len(ocr_text)} 字符"
+        )
+        _log(
+            f"GRID-CONFIG-PARSE OCR 文本片段: "
+            f"{ocr_text[:400].replace(chr(10), ' ⏎ ')}"
+        )
+        user_text = GRID_CONFIG_OCR_USER.format(ocr_text=ocr_text)
+        pipeline = "local_ocr"
+    parsed, text = chat_json(
+        name,
+        GRID_CONFIG_SYSTEM,
+        user_text,
+        images=images if vision else None,
+        max_tokens=4000,
+        log=_log,
+    )
+    _log(f"GRID-CONFIG-PARSE 模型返回 {len(text)} 字符")
+    parsed["parse_pipeline"] = pipeline
+    for config in parsed.get("configs") or []:
+        for key in (
+            "base_price", "spacing_up_pct", "spacing_down_pct",
+            "price_low", "price_high",
+        ):
+            if key in config:
+                config[key] = _round3(config.get(key))
+        for key in (
+            "shares_per_grid", "base_position", "max_position",
+            "levels_above", "levels_below",
+        ):
+            if key in config and config.get(key) is not None:
+                try:
+                    config[key] = int(float(config[key]))
+                except (TypeError, ValueError):
+                    config[key] = None
+    _log(
+        f"GRID-CONFIG-PARSE 结构化完成 configs="
+        f"{len(parsed.get('configs') or [])} "
+        f"platforms={len(parsed.get('detected_platforms') or [])}"
+    )
+    return parsed
+
+
+def verify_grid_configs(
+    configs: list[dict], known_codes: set | None = None
+) -> list[dict]:
+    """核验网格配置解析结果：代码/数值合法性 + 配置内部一致性。"""
+    verified = []
+    for index, config in enumerate(configs or []):
+        code = str(config.get("code") or "").strip()
+        errors: list[str] = []
+        warns: list[str] = []
+        if not CODE_RE.match(code):
+            errors.append(f"代码格式非法: {code!r}")
+        elif known_codes and code not in known_codes:
+            warns.append(f"代码 {code} 不在已知 ETF 列表，请人工确认")
+
+        base = _num(config.get("base_price"))
+        up = _num(config.get("spacing_up_pct"))
+        down = _num(config.get("spacing_down_pct"))
+        low = _num(config.get("price_low"))
+        high = _num(config.get("price_high"))
+        if base is None or base <= 0:
+            errors.append("基准价缺失或非法")
+        if up is not None and not 0 < up <= 20:
+            errors.append(f"上涨间距非法: {up}")
+        if down is not None and not 0 < down <= 20:
+            errors.append(f"下跌间距非法: {down}")
+        if low is not None and high is not None and low >= high:
+            errors.append("价格区间下限 >= 上限")
+        if base is not None and low is not None and base < low:
+            warns.append(f"基准价 {base} 低于区间下限 {low}")
+        if base is not None and high is not None and base > high:
+            warns.append(f"基准价 {base} 高于区间上限 {high}")
+
+        shares = config.get("shares_per_grid")
+        if shares is not None:
+            try:
+                shares_i = int(shares)
+                if shares_i <= 0:
+                    errors.append("委托数量必须为正")
+                elif shares_i % 100 != 0:
+                    warns.append(f"委托数量 {shares_i} 不是 100 的整数倍")
+            except (TypeError, ValueError):
+                errors.append("委托数量非法")
+        bp = config.get("base_position")
+        mp = config.get("max_position")
+        if bp is not None and mp is not None:
+            try:
+                if int(bp) > int(mp):
+                    errors.append("持仓区间下限 > 上限")
+            except (TypeError, ValueError):
+                errors.append("持仓区间非法")
+        elif bp is None and mp is None:
+            warns.append("未识别到持仓区间（base_position/max_position）")
+
+        verified.append({
+            **config,
+            "code": code,
+            "index": index,
+            "status": "error" if errors else "warn" if warns else "ok",
+            "errors": errors,
+            "warns": warns,
+            "issues": errors + warns,
+        })
+    return verified
 
 
 def verify_grid_records(

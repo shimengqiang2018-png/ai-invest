@@ -2,8 +2,8 @@
 """交易时段定时调度器（threading.Timer 链式）。
 
 规则：每个交易日（周一至周五）
-  上午 09:07 ~ 11:57、下午 13:07 ~ 15:27，每 10 分钟触发一次。
-即分钟个位为 7 的时刻（09:07、09:17、…、11:57、13:07、…、15:27）。
+  上午 09:07 ~ 11:57、下午 13:07 ~ 14:27，每 10 分钟触发一次（分钟个位为 7）；
+  14:30 ~ 15:27，每 5 分钟触发一次（分钟个位为 2 或 7）。
 """
 
 from __future__ import annotations
@@ -28,14 +28,23 @@ def in_window(hour_minute: int) -> bool:
 
 
 def next_tick(now: datetime | None = None) -> datetime:
-    """返回下一个调度时刻（严格晚于 now）。"""
+    """返回下一个调度时刻（严格晚于 now）。
+
+    14:30 前每 10 分钟（:07/:17/:27...），14:30 起每 5 分钟（:32/:37/:42...）。
+    """
     now = now or datetime.now(CN)
     for ahead in range(1, 60 * 24 * 8):
         candidate = now + timedelta(minutes=ahead)
         if candidate.weekday() >= 5:
             continue
         hour_minute = candidate.hour * 60 + candidate.minute
-        if candidate.minute % 10 == PHASE_MINUTE and in_window(hour_minute):
+        if not in_window(hour_minute):
+            continue
+        # 14:30 之后每 5 分钟，之前每 10 分钟
+        if hour_minute >= 14 * 60 + 30:
+            if candidate.minute % 5 == 2:
+                return candidate
+        elif candidate.minute % 10 == PHASE_MINUTE:
             return candidate
     # 兜底：下一个交易日的 09:07
     day = now.date() + timedelta(days=1)
@@ -125,9 +134,9 @@ class Scheduler:
             "last_run": self.last_run,
             "last_result": self.last_result,
             "windows": {
-                "morning": "09:07-12:00",
-                "afternoon": "13:00-15:30",
-                "phase_minutes": 10,
+                "morning": "09:07-11:57 (每10分钟)",
+                "afternoon_early": "13:07-14:27 (每10分钟)",
+                "afternoon_late": "14:32-15:27 (每5分钟)",
             },
             "timezone": "Asia/Shanghai",
         }

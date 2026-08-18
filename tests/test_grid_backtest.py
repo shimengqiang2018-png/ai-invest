@@ -473,5 +473,66 @@ class GridOHLCTests(unittest.TestCase):
                           f"OHLC 升级后缺少字段 '{field}'")
 
 
+class GridTPlusTests(unittest.TestCase):
+    """T+0 / T+1 交易制度约束测试。
+
+    T+1（A股股票 ETF/LOF）：当天买入的份额最早次日才能卖出。
+    T+0（跨境/商品/债券/货币 ETF）：当天买入可当天卖出。
+    """
+
+    def _run(self, closes, dates, opens, highs, lows, t_plus, **overrides):
+        params = dict(
+            spacing_up_pct=2.5, spacing_down_pct=2.5,
+            levels_above=5, levels_below=5, shares_per_grid=100,
+            total_capital=10000, position_pct=0.6, base_ratio=0.6,
+            stop_loss_ratio=0.0, execution=ExecutionConfig(),
+            t_plus=t_plus,
+        )
+        params.update(overrides)
+        return run_grid_backtest(
+            closes, dates, opens=opens, highs=highs, lows=lows, **params
+        )
+
+    def test_t1_first_day_cannot_sell(self):
+        """T+1：首日建仓的份额首日不能卖出；T+0 首日可卖。"""
+        closes = [10.0, 10.0]
+        dates = ["2024-01-01", "2024-01-02"]
+        opens = [10.0, 10.0]
+        highs = [10.6, 10.0]   # 首日 high 越过卖出线 10.25
+        lows = [10.0, 10.0]
+        r0 = self._run(closes, dates, opens, highs, lows, t_plus=0)
+        r1 = self._run(closes, dates, opens, highs, lows, t_plus=1)
+        self.assertGreater(r0["triggered_sell"], 0, "T+0 首日应可卖出")
+        self.assertEqual(r1["triggered_sell"], 0, "T+1 首日买入份额首日不可卖")
+
+    def test_t1_second_day_can_sell(self):
+        """T+1：首日建仓的份额次日可卖出（约束不永久锁定）。"""
+        closes = [10.0, 10.0]
+        dates = ["2024-01-01", "2024-01-02"]
+        opens = [10.0, 10.0]
+        highs = [10.0, 10.6]   # 次日 high 越过卖出线
+        lows = [10.0, 10.0]
+        r1 = self._run(closes, dates, opens, highs, lows, t_plus=1)
+        self.assertGreater(r1["triggered_sell"], 0, "T+1 次日应可卖出首日买入份额")
+
+    def test_t1_intraday_buy_then_sell_is_blocked(self):
+        """T+1：同日先买入后卖出时，当天买入的份额不参与当天卖出。
+
+        用 base_ratio=1.0（纯底仓、无初始网格仓），使卖出完全依赖当天买入的份额：
+        次日 low 触发买入，close 涨过卖出线触发卖出。T+1 下当天买入份额不可卖，
+        故触发卖出次数为 0；T+0 下当天买入可卖，触发卖出 > 0。
+        """
+        closes = [10.0, 10.0]
+        dates = ["2024-01-01", "2024-01-02"]
+        opens = [10.0, 10.0]
+        highs = [10.0, 10.2]
+        lows = [10.0, 9.7]     # 次日 low 越过买线 9.75，先买入
+        r0 = self._run(closes, dates, opens, highs, lows, t_plus=0, base_ratio=1.0)
+        r1 = self._run(closes, dates, opens, highs, lows, t_plus=1, base_ratio=1.0)
+        self.assertGreater(r0["triggered_buy"], 0, "次日 low 应触发买入")
+        self.assertGreater(r0["triggered_sell"], 0, "T+0 当天买入份额当天可卖")
+        self.assertEqual(r1["triggered_sell"], 0, "T+1 当天买入份额当天不可卖")
+
+
 if __name__ == "__main__":
     unittest.main()

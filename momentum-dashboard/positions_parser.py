@@ -5,7 +5,7 @@
   1. 调用视觉模型解析截图，输出 account_summary / holdings / trades
   2. verify_parsed() 逐字段核验（代码合法性、市值≈股数×现价、
      盈亏≈(现价-成本)×股数、汇总勾稽、与实时行情比对）
-  3. 前端确认后 update_positions() 写入 data/positions_latest.json（先备份）
+  3. 前端确认后 update_positions() 写入数据库（holdings_current + 快照）
 """
 
 from __future__ import annotations
@@ -25,8 +25,6 @@ from models import chat_json, load_config
 
 
 DATA_DIR = Path(__file__).resolve().parent.parent / "data"
-POSITIONS_FILE = DATA_DIR / "positions_latest.json"
-HISTORY_FILE = DATA_DIR / "ai_parse_history.json"
 REPORTS_DIR = DATA_DIR.parent / "reports"
 
 CODE_RE = re.compile(r"^\d{6}$")
@@ -231,6 +229,51 @@ def _load_etf_codes() -> set[str]:
     return codes
 
 
+_ETF_NAME_CACHE: dict[str, str] | None = None
+
+
+def _load_etf_names() -> dict[str, str]:
+    """返回 {代码: 名称} 字典（缓存），用于持仓代码/名称纠错。"""
+    global _ETF_NAME_CACHE
+    if _ETF_NAME_CACHE is None:
+        names: dict[str, str] = {}
+        try:
+            payload = json.loads(
+                (DATA_DIR / "etf_meta.json").read_text(encoding="utf-8")
+            )
+            for item in payload.get("etfs") or []:
+                code = str(item.get("code", ""))
+                name = str(item.get("name", "") or "").strip()
+                if CODE_RE.match(code) and name:
+                    names[code] = name
+        except (OSError, json.JSONDecodeError):
+            pass
+        _ETF_NAME_CACHE = names
+    return _ETF_NAME_CACHE
+
+
+def _is_one_digit_diff(code_a: str, code_b: str) -> bool:
+    """两个 6 位代码是否只有一位不同（OCR 常见错读，如 512880→519880）。"""
+    if len(code_a) != len(code_b):
+        return False
+    return sum(1 for x, y in zip(code_a, code_b) if x != y) == 1
+
+
+def _cached_last_close(code: str) -> float | None:
+    """读取该代码 K 线缓存的最新收盘价（用于 OCR 代码纠错的价格校验）。"""
+    try:
+        for path in (DATA_DIR / "cache").glob(
+            f"etf_v2_*_{code}_qfq_2000.json"
+        ):
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            bars = payload.get("bars") or []
+            if bars:
+                return float(bars[-1]["close"])
+    except Exception:
+        pass
+    return None
+
+
 def _holding_pnl_calc(holding: dict) -> dict:
     """计算持仓内部勾稽：市值≈股数×现价、盈亏≈(现价-成本)×股数。"""
     shares = _num(holding.get("shares"))
@@ -266,6 +309,7 @@ def _holding_pnl_calc(holding: dict) -> dict:
 def verify_parsed(parsed: dict, realtime: dict | None = None) -> dict:
     """核验解析结果，返回 {summary, holdings:[...], trades:[...]} + 每项状态。"""
     known_codes = _load_etf_codes()
+    known_names = _load_etf_names()
     summary = parsed.get("account_summary") or {}
     holdings = parsed.get("holdings") or []
     trades = parsed.get("trades") or []
@@ -293,6 +337,60 @@ def verify_parsed(parsed: dict, realtime: dict | None = None) -> dict:
         code = str(holding.get("code") or "").strip()
         errors = []
         warnings = []
+        # ── 代码/名称 OCR 纠错 ──
+        corrected_code = None
+        if CODE_RE.match(code) and code not in known_codes:
+            near = [k for k in known_codes if _is_one_digit_diff(k, code)]
+            candidate = None
+            if len(near) == 1:
+                candidate = near[0]
+            elif len(near) > 1:
+                # 多候选时用价格反推校验：市值÷份额 与 候选 K 线收盘价最接近者
+                shares = _num(holding.get("shares"))
+                market_value = _num(holding.get("market_value"))
+                implied = (
+                    market_value / shares
+                    if shares and market_value and shares > 0
+                    else None
+                )
+                if implied:
+                    scored = []
+                    for k in near:
+                        close = _cached_last_close(k)
+                        if close:
+                            scored.append((abs(close - implied) / implied, k))
+                    if scored:
+                        scored.sort(key=lambda item: item[0])
+                        if len(scored) == 1 or scored[1][0] >= scored[0][0] * 1.5:
+                            candidate = scored[0][1]
+            if candidate:
+                corrected_code = candidate
+                warnings.append(
+                    f"代码 {code} 疑似识别错误，已自动修正为 {corrected_code}"
+                    f"（{known_names.get(corrected_code, '')}）"
+                )
+                code = corrected_code
+                holding["code"] = code
+                holding["code_corrected"] = True
+            elif near:
+                warnings.append(
+                    f"代码 {code} 不在已知列表，疑似识别错误"
+                    f"（相近代码: {'/'.join(sorted(near))}）"
+                )
+        if code in known_names:
+            known_name = known_names[code]
+            raw_name = str(holding.get("name") or "").strip()
+            if corrected_code:
+                holding["name"] = known_name
+            elif raw_name and raw_name != known_name:
+                # 简称差异（如 黄金ETF vs 黄金ETF华安）不算错；仅无任何重叠字符才修正
+                if known_name in raw_name or raw_name in known_name:
+                    pass
+                elif not any(ch in raw_name for ch in known_name):
+                    warnings.append(
+                        f"名称「{raw_name}」与代码不符，已按代码修正为「{known_name}」"
+                    )
+                    holding["name"] = known_name
         if not CODE_RE.match(code):
             errors.append(f"代码格式非法: {code!r}")
         elif known_codes and code not in known_codes:
@@ -446,8 +544,57 @@ def verify_parsed(parsed: dict, realtime: dict | None = None) -> dict:
     }
 
 
+STRATEGY_FILE = Path(__file__).resolve().parent / "holdings_strategy.json"
+
+
+def _classify_holding(code: str, shares: int) -> tuple[str, str, int]:
+    """按 holdings_strategy.json + CONFIGS 把持仓分类为 网格/动量/共用/底仓/现金/其他，
+    并给出底仓股数（网格/共用取配置 base_position，底仓类为全部持仓）。"""
+    strategy_map = {}
+    try:
+        strategy_map = json.loads(STRATEGY_FILE.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        pass
+    by_code = strategy_map.get("by_code", {}) or {}
+    entry = by_code.get(code) or {}
+    label = (
+        entry.get("strategy")
+        or strategy_map.get("default", {}).get("strategy")
+        or "其他"
+    )
+    if label in ("网格核心", "网格观察", "网格只卖", "网格", "网格交易"):
+        strategy = "网格"
+    elif label in ("动量轮动", "动量"):
+        strategy = "动量"
+    elif label == "共用":
+        strategy = "共用"
+    elif label in ("底仓", "减仓后底仓"):
+        strategy = "底仓"
+    elif label == "现金储备":
+        strategy = "现金"
+    else:
+        strategy = "其他"
+    bucket = entry.get("bucket") or strategy
+    base_shares = 0
+    if strategy in ("网格", "共用"):
+        try:
+            from tools import grid_trading as gt
+            base_shares = int(gt.CONFIGS.get(code, {}).get("base_position") or 0)
+        except Exception as exc:
+            import logging
+            logging.getLogger("momentum-dashboard").warning(
+                "POS 底仓配置读取失败 code=%s: %s", code, exc
+            )
+            base_shares = 0
+    elif strategy == "底仓":
+        base_shares = shares
+    base_shares = max(0, min(base_shares, shares))
+    return strategy, bucket, base_shares
+
+
 def update_positions(verified: dict, source_note: str = "AI 图片解析") -> dict:
-    """核验通过后写入系统。先备份旧文件，再写新快照并追加解析历史。"""
+    """核验通过后写入系统。持仓统一存数据库（holdings_current + 快照历史），
+    不再使用本地文件作为存储。"""
     holdings = []
     for holding in verified.get("holdings") or []:
         if holding.get("status") == "error":
@@ -455,8 +602,12 @@ def update_positions(verified: dict, source_note: str = "AI 图片解析") -> di
                 f"存在核验错误项（{holding.get('code')}）: "
                 f"{'; '.join(holding.get('issues', []))}，请修正后再更新"
             )
+        code = str(holding.get("code") or "").strip()
+        strategy, bucket, base_shares = _classify_holding(
+            code, int(holding.get("shares") or 0)
+        )
         holdings.append({
-            "code": holding.get("code"),
+            "code": code,
             "name": holding.get("name"),
             "shares": holding.get("shares"),
             "available": holding.get("available"),
@@ -467,7 +618,9 @@ def update_positions(verified: dict, source_note: str = "AI 图片解析") -> di
             "pnl_pct": holding.get("pnl_pct"),
             "weight_pct": holding.get("weight_pct"),
             "daily_pnl": holding.get("daily_pnl"),
-            "strategy": holding.get("strategy"),
+            "strategy": strategy,
+            "bucket": bucket,
+            "base_shares": base_shares,
             "source": holding.get("source"),
             "verified": holding.get("verified"),
         })
@@ -516,42 +669,22 @@ def update_positions(verified: dict, source_note: str = "AI 图片解析") -> di
         ],
     }
 
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
-    if POSITIONS_FILE.exists():
-        backup = POSITIONS_FILE.with_name(
-            f"positions_latest.bak-{time.strftime('%Y%m%d%H%M%S')}.json"
-        )
-        shutil.copy2(POSITIONS_FILE, backup)
-
-    with open(POSITIONS_FILE, "w", encoding="utf-8") as handle:
-        json.dump(snapshot, handle, ensure_ascii=False, indent=2)
     _write_portfolio_markdown(snapshot)
     excel_file = _write_excel_snapshot(snapshot)
     if excel_file:
         snapshot["excel_file"] = excel_file
 
-    history = []
-    if HISTORY_FILE.exists():
-        try:
-            history = json.loads(HISTORY_FILE.read_text(encoding="utf-8"))
-            if not isinstance(history, list):
-                history = []
-        except (OSError, json.JSONDecodeError):
-            history = []
-    history.append({
-        "updated_at": snapshot["date"],
-        "source": source_note,
-        "holdings_count": len(holdings),
-        "trades_count": len(snapshot["trades"]),
-        "account_summary": snapshot["account_summary"],
-    })
-    HISTORY_FILE.write_text(
-        json.dumps(history, ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
-    # 同步写入 SQLite 数据库
+    # 持仓数据统一写入数据库（全局规则：金额字段 DECIMAL(p,3)）
     try:
-        from db import append_parse_history, save_positions_snapshot
+        from db import (
+            append_parse_history,
+            save_holdings_current,
+            save_positions_snapshot,
+        )
+        save_holdings_current(
+            holdings,
+            {**snapshot["account_summary"], "source": source_note},
+        )
         save_positions_snapshot(snapshot)
         append_parse_history(
             snapshot["date"],
@@ -560,8 +693,8 @@ def update_positions(verified: dict, source_note: str = "AI 图片解析") -> di
             len(snapshot["trades"]),
             snapshot,
         )
-    except Exception:
-        pass  # 数据库写入失败不影响文件落盘
+    except Exception as exc:
+        raise RuntimeError(f"持仓写入数据库失败: {exc}") from exc
     return snapshot
 
 

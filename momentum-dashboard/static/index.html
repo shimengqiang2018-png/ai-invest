@@ -43,7 +43,10 @@
           <span class="nav-icon">▤</span>回测分析
         </button>
         <button class="nav-item" data-tab="screener">
-          <span class="nav-icon">⌕</span>选品池
+          <span class="nav-icon">⌕</span>动量选品池
+        </button>
+        <button class="nav-item" data-tab="grid-screener">
+          <span class="nav-icon">▦</span>网格选品池
         </button>
         <button class="nav-item" data-tab="positions">
           <span class="nav-icon">▦</span>持仓
@@ -143,12 +146,28 @@
           <div id="grid-table" class="table-wrap"></div>
         </div>
         <div class="panel">
-          <div class="panel-title">网格持仓详情 <span class="panel-sub">口径：底仓=策略配置，网格仓=总持仓-底仓（按持仓快照+成交记录推算）</span></div>
+          <div class="panel-title">网格持仓详情 <span class="panel-sub">口径：底仓=数据库 base_shares，网格仓=总持仓-底仓（持仓快照+触发记录联动；现价/盈亏按实时行情）</span></div>
           <div class="toolbar"><span class="muted" id="grid-positions-summary"></span></div>
           <div id="grid-positions" class="table-wrap"></div>
         </div>
         <div class="panel">
-          <div class="panel-title">触发记录录入 <span class="panel-sub">手动录入 或 上传成交截图由模型识别后核验入库（同步 data/grid_triggers.json）</span></div>
+          <div class="panel-title">网格配置 <span class="panel-sub">上传条件单截图 → 识别 → 核对修改 → 参数寻优 → 确认保存（存 grid_configs 表）</span></div>
+          <div class="toolbar">
+            <label>识别模型 <select id="grid-config-provider"><option value="">加载中…</option></select></label>
+            <button class="btn" id="grid-config-upload">选择配置截图</button>
+            <input id="grid-config-files" type="file" accept="image/*" multiple hidden>
+            <button class="btn" id="grid-config-parse">解析配置</button>
+            <span class="muted" id="grid-config-note"></span>
+          </div>
+          <div id="grid-config-parse-result" class="table-wrap"></div>
+          <div class="panel-title" style="margin-top:12px">已保存配置
+            <button class="btn mini" id="grid-configs-reload">刷新</button>
+            <span class="panel-sub" id="grid-configs-count"></span>
+          </div>
+          <div id="grid-configs-list" class="table-wrap"></div>
+        </div>
+        <div class="panel">
+          <div class="panel-title">触发记录录入 <span class="panel-sub">手动录入 或 上传成交截图由模型识别后核验入库（存 MySQL grid_triggers 表）</span></div>
           <div class="toolbar">
             <label>标的 <select id="grid-trigger-code"></select></label>
             <label>日期 <input id="grid-trigger-date" type="date"></label>
@@ -228,6 +247,54 @@
         </div>
       </section>
 
+      <!-- 网格选品池 -->
+      <section class="tab" id="tab-grid-screener">
+        <div class="toolbar">
+          <button class="btn" id="grid-screener-run">筛选</button>
+          <span class="muted" id="grid-screener-note"></span>
+        </div>
+        <div class="panel">
+          <div class="panel-title">网格选品池 <span class="panel-sub">全市场 ETF/LOF 网格适配评分（波动甜区/流动性/均值回归/回撤）· 每行可寻优并保存为网格配置</span></div>
+          <div class="toolbar">
+            <label>类型
+              <select id="grid-screener-type">
+                <option value="">全部</option>
+                <option value="etf">ETF</option>
+                <option value="lof">LOF</option>
+              </select>
+            </label>
+            <label>T+0
+              <select id="grid-screener-t0">
+                <option value="">全部</option>
+                <option value="1">支持 T+0</option>
+                <option value="0">T+1</option>
+              </select>
+            </label>
+            <label>类别 <select id="grid-screener-category"><option value="">全部</option></select></label>
+            <label>最小规模(亿) <input id="grid-screener-size" type="number" value="5" size="6" min="0"></label>
+            <label>最低评分 <input id="grid-screener-score" type="number" value="16" size="5" min="0" max="21"></label>
+            <label>波动率 <input id="grid-screener-vol-min" type="number" value="15" size="4" min="0">~<input id="grid-screener-vol-max" type="number" value="40" size="4" min="0">%</label>
+            <label>最低成交额(万) <input id="grid-screener-amount" type="number" value="3000" size="6" min="0"></label>
+            <label>最大|20日趋势|% <input id="grid-screener-trend" type="number" value="12" size="5" min="0"></label>
+            <label>最小振幅% <input id="grid-screener-amplitude" type="number" value="1.4" size="4" min="0" step="0.1"></label>
+            <label>最大回撤% <input id="grid-screener-drawdown" type="number" value="30" size="4" min="0"></label>
+            <label>趋势评分≥ <input id="grid-screener-trend-score" type="number" value="0" size="4" min="-5" max="5"></label>
+            <label>排序
+              <select id="grid-screener-sort">
+                <option value="score" selected>网格评分</option>
+                <option value="trend_score">趋势评分</option>
+                <option value="amplitude">每日振幅</option>
+                <option value="vol">波动率</option>
+                <option value="size">规模</option>
+                <option value="amount">成交额</option>
+                <option value="trend">趋势强度</option>
+              </select>
+            </label>
+          </div>
+          <div id="grid-screener-result" class="table-wrap"></div>
+        </div>
+      </section>
+
       <!-- 回测分析 -->
       <section class="tab" id="tab-backtest">
         <div class="toolbar">
@@ -284,7 +351,13 @@
         <div class="grid-2">
           <div class="panel">
             <div class="panel-title">枚举组合回测 Top 10 <span class="panel-sub" id="enum-sub">加载中…</span></div>
+            <div class="toolbar">
+              <button class="btn ghost" id="enum-recalc">重新枚举</button>
+              <button class="btn ghost" id="walk-forward">样本外验证</button>
+              <span class="muted" id="enum-note"></span>
+            </div>
             <div id="bt-enum" class="table-wrap"></div>
+            <div id="wf-panel" hidden></div>
           </div>
           <div class="panel">
             <div class="panel-title">最近交易</div>
@@ -309,12 +382,41 @@
               <option value="640">全部</option>
             </select>
           </label>
+          <label class="muted">规模≥
+            <input id="sc-min-size" type="number" value="10" min="0" style="width:52px">亿
+          </label>
+          <label class="muted">日均成交额≥
+            <input id="sc-min-turnover" type="number" value="1" min="0" step="0.5" style="width:52px">亿
+          </label>
+          <button class="btn ghost" id="sc-recalc">重新扫描全市场</button>
           <button class="btn ghost" id="sc-run-screener">运行四维选品</button>
           <span class="muted" id="sc-note"></span>
         </div>
         <div class="panel">
           <div class="panel-title">全市场动量适配评分 <span class="panel-sub" id="sc-subtitle"></span></div>
           <div id="sc-table" class="table-wrap"></div>
+        </div>
+        <div class="panel">
+          <div class="panel-title">动量预设池（选品池 → 预设池 · 存 MySQL）<span class="panel-sub" id="pp-sub">尚未生成</span></div>
+          <div class="toolbar">
+            <button class="btn ghost" id="pp-build">生成预设池</button>
+            <label class="muted" style="margin-left:8px">
+              <input type="checkbox" id="pp-exclude-new" checked> 排除次新ETF（历史≥4年）
+            </label>
+            <label class="muted" style="margin-left:8px">规模≥
+              <input id="pp-min-size" type="number" value="10" min="0" step="1" style="width:52px">亿
+            </label>
+            <label class="muted" style="margin-left:8px">日均成交额≥
+              <input id="pp-min-turnover" type="number" value="1" min="0" step="0.5" style="width:52px">亿
+            </label>
+            <label>池名称
+              <input id="pp-key" value="veteran" size="12" style="width:110px">
+            </label>
+            <span class="muted" id="pp-note"></span>
+          </div>
+          <div id="pp-candidates" class="table-wrap"></div>
+          <div class="panel-sub" id="pp-current-label" style="margin-top:10px">当前已保存的预设池</div>
+          <div id="pp-current" class="chips"></div>
         </div>
         <div class="grid-2">
           <div class="panel">
@@ -375,7 +477,7 @@
       <section class="tab" id="tab-db">
         <div class="cards" id="db-summary"></div>
         <div class="panel">
-          <div class="panel-title">数据表浏览 <span class="panel-sub">dashboard.db · SQLite</span></div>
+          <div class="panel-title">数据表浏览 <span class="panel-sub">MySQL · ai_invest</span></div>
           <div class="toolbar">
             <label>表
               <select id="db-table">

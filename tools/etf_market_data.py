@@ -3,14 +3,17 @@
 
 from __future__ import annotations
 
+import functools
 import hashlib
 import json
 import math
 import os
 import random
+import re
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from dataclasses import asdict, dataclass, replace
 from datetime import datetime, timezone
@@ -22,11 +25,15 @@ _TIMEOUT = 15
 _RETRY_COUNT = 4
 _RETRY_BASE_DELAY = 3.0
 _SCHEMA_VERSION = 3
-_VALID_SOURCES = frozenset({"eastmoney", "tencent", "sina"})
-# 数据源优先级：东财前复权(fqt=1)为主，腾讯 qfq 为参考/兜底，新浪为最后网络兜底。
+_VALID_SOURCES = frozenset({"ths", "eastmoney", "tencent", "sina"})
+# 数据源优先级：同花顺前复权 qfq 为主（实测最稳、历史上市至今），
+# 东财 fqt=1 为备源（分红+份额折算处理最完整，仅东财可达时启用），
+# 腾讯 qfq 为参考/兜底，新浪为最后网络兜底。
 # 新浪对 ETF 返回不复权序列（工具只能修正 >25% 的份额折算，无法处理分红），
 # 因此新浪序列永远不允许作为已交叉验证的主源。
-_SOURCE_PRIORITY = ("eastmoney", "tencent", "sina")
+_SOURCE_PRIORITY = ("ths", "eastmoney", "tencent", "sina")
+# 同花顺接口需要 Referer 且走 IPv4 才稳定（curl -4）。
+_THS_REFERER = "http://stockpage.10jqka.com.cn/"
 _ADJUSTMENT = "qfq"
 _VOLUME_ADJUSTMENT = "none"
 _MAX_DAILY_RETURN = 0.20
@@ -44,6 +51,56 @@ _RATE_LIMIT_ENABLED = True
 _MIN_REQUEST_INTERVAL = 1.0        # Minimum seconds between HTTP requests
 _RATE_LIMIT_JITTER = 0.3           # Max additional random jitter
 _last_request_time = 0.0
+_THROTTLE_LOCK = threading.Lock()
+
+# 自适应源级保护：连续失败自动冷却该数据源（同花顺等非公开接口限流/封禁自愈）。
+# 403/空响应连续 _BAN_FAIL_THRESHOLD 次、或网络错误连续 _GENERIC_FAIL_THRESHOLD 次，
+# 则把该源冷却 _COOLDOWN_SECONDS 秒，期间自动跳过、降级到下一个源。
+_SOURCE_FAILS: dict[str, int] = {}
+_SOURCE_COOLDOWN_UNTIL: dict[str, float] = {}
+_COOLDOWN_SECONDS = 300.0
+_BAN_FAIL_THRESHOLD = 3
+_GENERIC_FAIL_THRESHOLD = 8
+_SOURCE_FAILS_LOCK = threading.Lock()
+
+
+def _source_key(url: str) -> str:
+    if "10jqka" in url:
+        return "ths"
+    if "eastmoney" in url:
+        return "eastmoney"
+    if "gtimg" in url or "ifzq" in url:
+        return "tencent"
+    if "sina" in url:
+        return "sina"
+    return "other"
+
+
+def _source_in_cooldown(source: str) -> bool:
+    with _SOURCE_FAILS_LOCK:
+        until = _SOURCE_COOLDOWN_UNTIL.get(source, 0.0)
+    return bool(until) and time.time() < until
+
+
+def _mark_source_success(source: str) -> None:
+    with _SOURCE_FAILS_LOCK:
+        _SOURCE_FAILS[source] = 0
+
+
+def _mark_source_failure(source: str, ban_like: bool) -> None:
+    with _SOURCE_FAILS_LOCK:
+        fails = _SOURCE_FAILS.get(source, 0) + 1
+        _SOURCE_FAILS[source] = fails
+        threshold = _BAN_FAIL_THRESHOLD if ban_like else _GENERIC_FAIL_THRESHOLD
+        if fails >= threshold:
+            _SOURCE_COOLDOWN_UNTIL[source] = time.time() + _COOLDOWN_SECONDS
+            _SOURCE_FAILS[source] = 0
+            print(
+                f"[etf_market_data] {source} 连续失败 {fails} 次，"
+                f"冷却 {_COOLDOWN_SECONDS:.0f}s 后自动恢复（期间降级其他源）",
+                file=sys.stderr,
+            )
+
 
 # --- Sina Finance ---
 _SINA_MAX_DATALEN = 2000           # Sina API max bars per request
@@ -51,15 +108,21 @@ _SINA_INCREMENTAL_DAYS = 90        # Calendar days to fetch for incremental upda
 
 
 def _throttle() -> None:
-    """Serialize HTTP requests to avoid triggering API rate limits."""
+    """Serialize HTTP requests to avoid triggering API rate limits.
+
+    间隔可用环境变量 ETF_DATA_MIN_REQUEST_INTERVAL 覆盖（秒），
+    供全市场扫描等批量任务按需放宽限流（配合并行抓取提速）。
+    """
     global _last_request_time
     if not _RATE_LIMIT_ENABLED:
         return
-    elapsed = time.time() - _last_request_time
-    if elapsed < _MIN_REQUEST_INTERVAL:
-        jitter = random.uniform(0, _RATE_LIMIT_JITTER)
-        time.sleep(_MIN_REQUEST_INTERVAL - elapsed + jitter)
-    _last_request_time = time.time()
+    interval = float(os.environ.get("ETF_DATA_MIN_REQUEST_INTERVAL", _MIN_REQUEST_INTERVAL))
+    with _THROTTLE_LOCK:
+        elapsed = time.time() - _last_request_time
+        if elapsed < interval:
+            jitter = random.uniform(0, _RATE_LIMIT_JITTER)
+            time.sleep(interval - elapsed + jitter)
+        _last_request_time = time.time()
 
 
 @dataclass(frozen=True)
@@ -149,39 +212,60 @@ def _tencent_url_range(symbol: str, start: str, end: str, count: int = 1600) -> 
     )
 
 
-def _default_transport(url: str) -> bytes:
+def _default_transport(
+    url: str, referer: str | None = None, ipv4: bool = False
+) -> bytes:
     _throttle()
+    source = _source_key(url)
+    if _source_in_cooldown(source):
+        raise ConnectionError(f"数据源 {source} 冷却中（连续失败自动触发，稍后自动恢复）")
+    # 批量扫描可放宽/收紧：ETF_DATA_TIMEOUT / ETF_DATA_RETRIES /
+    # ETF_DATA_RETRY_BASE_DELAY（快速失败，避免重试风暴拖垮全市场扫描）
+    retry_count = max(1, int(os.environ.get("ETF_DATA_RETRIES", _RETRY_COUNT)))
+    timeout = int(os.environ.get("ETF_DATA_TIMEOUT", _TIMEOUT))
+    retry_base = float(os.environ.get("ETF_DATA_RETRY_BASE_DELAY", _RETRY_BASE_DELAY))
     last_error = None
-    for attempt in range(_RETRY_COUNT):
+    for attempt in range(retry_count):
         try:
+            command = [
+                "/usr/bin/curl",
+                "-sS",
+                "--fail",
+                "--connect-timeout", "10",
+                "--max-time", str(timeout),
+                "--noproxy",
+                "*",
+                "-H",
+                "User-Agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)",
+            ]
+            if referer is not None:
+                command += ["-H", f"Referer: {referer}"]
+            if ipv4:
+                command.append("-4")
+            command.append(url)
             result = subprocess.run(
-                [
-                    "/usr/bin/curl",
-                    "-sS",
-                    "--fail",
-                    "--connect-timeout", "10",
-                    "--max-time", str(_TIMEOUT),
-                    "--noproxy",
-                    "*",
-                    "-H",
-                    "User-Agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)",
-                    url,
-                ],
+                command,
                 capture_output=True,
-                timeout=_TIMEOUT + 5,
+                timeout=timeout + 5,
             )
             if result.returncode == 0 and result.stdout.strip():
+                _mark_source_success(source)
                 return result.stdout
             detail = result.stderr.decode("utf-8", errors="replace").strip()
+            ban_like = (
+                result.returncode == 0 and not result.stdout.strip()
+            ) or "403" in detail
+            _mark_source_failure(source, ban_like)
             last_error = ConnectionError(
-                f"行情请求失败 attempt={attempt + 1}/{_RETRY_COUNT}: {detail or url}"
+                f"行情请求失败 attempt={attempt + 1}/{retry_count}: {detail or url}"
             )
         except (subprocess.TimeoutExpired, OSError):
+            _mark_source_failure(source, ban_like=False)
             last_error = ConnectionError(
-                f"行情请求超时 attempt={attempt + 1}/{_RETRY_COUNT}: {url}"
+                f"行情请求超时 attempt={attempt + 1}/{retry_count}: {url}"
             )
-        if attempt < _RETRY_COUNT - 1:
-            time.sleep(_RETRY_BASE_DELAY * (2 ** attempt))
+        if attempt < retry_count - 1:
+            time.sleep(retry_base * (2 ** attempt))
     raise last_error or ConnectionError(f"行情请求失败: {url}")
 
 
@@ -503,6 +587,121 @@ def _verify_reference_overlap(
     )
 
 
+# ---------------------------------------------------------------------------
+# THS (同花顺) provider — qfq daily K-line via year paging
+# ---------------------------------------------------------------------------
+
+_THS_VOLUME_LOT = 100.0  # THS volume 单位是股 (shares)，归一化为手 (lots)
+
+
+def _ths_url(code: str, year: str | None = None) -> str:
+    """Build 同花顺 daily K-line URL for hs_{code}.
+
+    ``year=None`` → ``last.js``（最近 ~140 根 + 上市日 start 元数据）；
+    指定年份 → 该年全年 K 线（每文件约 240 根）。
+    """
+    period = year or "last"
+    return f"http://d.10jqka.com.cn/v6/line/hs_{code}/01/{period}.js"
+
+
+def _request_ths(request: Callable[[str], object], url: str) -> str:
+    """Fetch a THS daily-line JS payload (JS-wrapped text, not JSON)."""
+    payload = request(url)
+    if isinstance(payload, bytes):
+        payload = payload.decode("utf-8")
+    if isinstance(payload, str):
+        return payload
+    raise ConnectionError(f"同花顺响应格式错误: {url}")
+
+
+def _parse_ths(payload: str, code: str) -> list[dict]:
+    """Parse 同花顺 JS-wrapped year K-line payload.
+
+    Response shape: ``quotebridge_v6_line_...({"num":..,"start":"20120528",
+    "total":"3455","data":"20260115,open,high,low,close,volume,amount,...;
+    ...","marketType":...})`` — data 段以 ``"marketType"`` 结尾需裁剪。
+    字段顺序 OHL**C**（与腾讯 open,close,high,low 不同）；volume 单位是股，
+    归一化为手（/100），与东财/腾讯口径一致。
+    """
+    match = re.search(r'"data":"(.*?)",\s*"marketType"', payload, re.S)
+    if not match:
+        match = re.search(r'"data":"(.*)"', payload, re.S)
+    if not match:
+        raise ConnectionError(f"同花顺响应缺少 data 段: {code}")
+    bars: list[dict] = []
+    previous_date: str | None = None
+    for row in match.group(1).split(";"):
+        fields = row.split(",")
+        if len(fields) < 6:
+            continue
+        try:
+            raw_date = fields[0].strip()
+            date = f"{raw_date[:4]}-{raw_date[4:6]}-{raw_date[6:8]}"
+            datetime.strptime(date, "%Y-%m-%d")
+            open_price = float(fields[1])
+            high_price = float(fields[2])
+            low_price = float(fields[3])
+            close_price = float(fields[4])
+            volume = float(fields[5]) / _THS_VOLUME_LOT
+        except (TypeError, ValueError) as exc:
+            raise MarketDataQualityError(
+                f"同花顺 K 线包含非法字段或数值: {code} {fields[0]}"
+            ) from exc
+        if not all(
+            math.isfinite(v)
+            for v in (open_price, close_price, high_price, low_price, volume)
+        ):
+            raise MarketDataQualityError(f"同花顺 K 线包含非有限数值: {code} {date}")
+        if min(open_price, close_price, high_price, low_price) <= 0 or volume < 0:
+            raise MarketDataQualityError(
+                f"同花顺 K 线包含非正价格或负成交量: {code} {date}"
+            )
+        if previous_date is not None and date <= previous_date:
+            raise MarketDataQualityError(f"同花顺 K 线日期重复或未升序: {code} {date}")
+        bars.append({
+            "date": date,
+            "open": open_price,
+            "close": close_price,
+            "high": high_price,
+            "low": low_price,
+            "volume": volume,
+        })
+        previous_date = date
+    if not bars:
+        raise ConnectionError(f"同花顺未返回 K 线: {code}")
+    return bars
+
+
+def _fetch_ths_full(
+    symbol: str,
+    request: Callable[[str], object],
+) -> list[dict]:
+    """Fetch THS qfq full history by paging year files.
+
+    先拉 last.js 拿到上市日(start)，再从起始年份逐年拉 01/{year}.js，
+    合并后按日期排序；单年请求失败跳过，不拖垮整体。
+    """
+    code = symbol[2:] if symbol[:2] in ("sh", "sz") else symbol
+    meta = _request_ths(request, _ths_url(code))
+    start_match = re.search(r'"start":"(\d{8})"', meta)
+    start_year = int(start_match.group(1)[:4]) if start_match else 2013
+    current_year = datetime.now(_SHANGHAI_TZ).year
+
+    merged: dict[str, dict] = {}
+    for year in range(start_year, current_year + 1):
+        try:
+            payload = _request_ths(request, _ths_url(code, str(year)))
+            bars = _parse_ths(payload, code)
+        except Exception:  # noqa: BLE001 - 单年失败跳过
+            continue
+        for bar in bars:
+            merged[bar["date"]] = bar
+    bars = [merged[date] for date in sorted(merged)]
+    if not bars:
+        raise ConnectionError(f"同花顺未返回 K 线: {code}")
+    return bars
+
+
 def _fetch_tencent_full(
     symbol: str,
     request: Callable[[str], object],
@@ -556,6 +755,7 @@ def _make_series(
     code: str,
     bars: list[dict],
     verification: tuple[str, str, int, float, str, float],
+    source: str = "eastmoney",
 ) -> MarketDataSeries:
     immutable_bars = tuple(bars)
     (
@@ -569,7 +769,7 @@ def _make_series(
     manifest = MarketDataManifest(
         schema_version=_SCHEMA_VERSION,
         code=code,
-        source="eastmoney",
+        source=source,
         adjustment=_ADJUSTMENT,
         volume_adjustment=_VOLUME_ADJUSTMENT,
         fetched_at=datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
@@ -650,7 +850,7 @@ def validate_market_data(series: MarketDataSeries) -> None:
         manifest.adjustment_verified
         and manifest.verification_source == "tencent_qfqday"
     ) or (
-        manifest.source in ("tencent", "sina")
+        manifest.source in ("tencent", "sina", "ths")
         and not manifest.adjustment_verified
         and manifest.verification_source == "provider_declared_qfqday"
     ) or (
@@ -861,6 +1061,7 @@ def load_etf_series(
     transport=None,
     as_of: str | None = None,
     refresh: bool = False,
+    verify_reference: bool = True,
 ) -> MarketDataSeries:
     """Load a qfq ETF series with multi-source fallback.
 
@@ -893,7 +1094,17 @@ def load_etf_series(
     request = transport or _default_transport
 
     symbol = _exchange_symbol(code)
+    # 数据源顺序可用 ETF_DATA_SOURCE_ORDER 覆盖（逗号分隔，如 ths,eastmoney,tencent），
+    # 供东财不可达/扫描提速等场景使用；默认 ths,eastmoney,tencent,sina。
+    source_order = [
+        s.strip()
+        for s in os.environ.get(
+            "ETF_DATA_SOURCE_ORDER", ",".join(_SOURCE_PRIORITY)
+        ).split(",")
+        if s.strip()
+    ]
     cache_paths = {
+        "ths": directory / f"etf_v2_ths_{code}_{adjustment}_{count}.json",
         "eastmoney": directory / f"etf_v2_eastmoney_{code}_{adjustment}_{count}.json",
         "tencent": directory / f"etf_v2_tencent_{code}_{adjustment}_{count}.json",
         "sina": directory / f"etf_v2_sina_{code}_{adjustment}_{count}.json",
@@ -1039,85 +1250,130 @@ def load_etf_series(
         )
 
     # ══════════════════════════════════════════════════════════════════
-    # STEP 2: Full fetch from Eastmoney fqt=1 (primary) + Tencent full-history
+    # STEP 2: Full fetch from THS qfq (primary) + Tencent full-history
     # cross-verification（含逐日收益比对与价格比漂移检测）
     # ══════════════════════════════════════════════════════════════════
-    em_error = None
-    try:
-        bars = _parse_eastmoney(_request_json(request, _eastmoney_url(code)), code)
-        bars = _drop_incomplete_last_bar(bars)
-        verification, measured_drift = _verify_with_tencent(bars, require_full=True)
-        if verification is None:
-            declared = _standalone(bars, "eastmoney")
-            declared["max_ratio_deviation"] = measured_drift
-            series = _make_series_standalone(
-                code, bars, "eastmoney", declared
+    ths_error = None
+    if "ths" in source_order:
+        try:
+            # 同花顺按年分页全历史（须带 Referer 并强制 IPv4 才稳定）
+            ths_request = request
+            if request is _default_transport:
+                ths_request = functools.partial(
+                    _default_transport, referer=_THS_REFERER, ipv4=True
+                )
+            bars = _fetch_ths_full(symbol, ths_request)
+            bars = _drop_incomplete_last_bar(bars)
+            verification, measured_drift = (None, 0.0)
+            if verify_reference:
+                verification, measured_drift = _verify_with_tencent(
+                    bars, require_full=True
+                )
+            if verification is None:
+                declared = _standalone(bars, "ths")
+                declared["max_ratio_deviation"] = measured_drift
+                series = _make_series_standalone(code, bars, "ths", declared)
+            else:
+                series = _make_series(code, bars, verification, source="ths")
+            return _finalise(series, cache_paths["ths"])
+        except Exception as exc:
+            ths_error = exc
+            print(
+                f"[etf_market_data] {code}: 同花顺主源不可用/数据未过质量校验"
+                f" ({exc})，尝试东方财富源",
+                file=sys.stderr,
             )
-        else:
-            series = _make_series(code, bars, verification)
-        return _finalise(series, cache_paths["eastmoney"])
-    except Exception as exc:
-        em_error = exc
-        print(
-            f"[etf_market_data] {code}: 东方财富主源不可用/数据未过质量校验"
-            f" ({exc})，尝试腾讯源",
-            file=sys.stderr,
-        )
+    else:
+        ths_error = ConnectionError("按 ETF_DATA_SOURCE_ORDER 跳过同花顺源")
+
+    # ══════════════════════════════════════════════════════════════════
+    # STEP 2.5: Eastmoney fqt=1 fallback + Tencent cross-verification
+    # ══════════════════════════════════════════════════════════════════
+    em_error = None
+    if "eastmoney" in source_order:
+        try:
+            bars = _parse_eastmoney(_request_json(request, _eastmoney_url(code)), code)
+            bars = _drop_incomplete_last_bar(bars)
+            verification, measured_drift = (None, 0.0)
+            if verify_reference:
+                verification, measured_drift = _verify_with_tencent(bars, require_full=True)
+            if verification is None:
+                declared = _standalone(bars, "eastmoney")
+                declared["max_ratio_deviation"] = measured_drift
+                series = _make_series_standalone(
+                    code, bars, "eastmoney", declared
+                )
+            else:
+                series = _make_series(code, bars, verification)
+            return _finalise(series, cache_paths["eastmoney"])
+        except Exception as exc:
+            em_error = exc
+            print(
+                f"[etf_market_data] {code}: 东方财富备源不可用/数据未过质量校验"
+                f" ({exc})，尝试腾讯源",
+                file=sys.stderr,
+            )
+    else:
+        em_error = ConnectionError("按 ETF_DATA_SOURCE_ORDER 跳过东财源")
 
     # ══════════════════════════════════════════════════════════════════
     # STEP 3: Tencent standalone fallback
     # ══════════════════════════════════════════════════════════════════
     tencent_error = None
-    try:
-        # 分页拉取腾讯 qfq 全历史（单次请求被端点限制在 ~640 根）
-        bars = _fetch_tencent_full(symbol, request)
-        bars = _drop_incomplete_last_bar(bars)
-        if not bars:
-            raise ConnectionError("腾讯未返回 K 线数据")
-        series = _make_series_standalone(
-            code, bars, "tencent", _standalone(bars, "tencent")
-        )
+    if "tencent" in source_order:
+        try:
+            # 分页拉取腾讯 qfq 全历史（单次请求被端点限制在 ~640 根）
+            bars = _fetch_tencent_full(symbol, request)
+            bars = _drop_incomplete_last_bar(bars)
+            if not bars:
+                raise ConnectionError("腾讯未返回 K 线数据")
+            series = _make_series_standalone(
+                code, bars, "tencent", _standalone(bars, "tencent")
+            )
 
-        print(
-            f"[etf_market_data] {code}: 东方财富不可用，已回退至腾讯源"
-            f"（数据深度受限，约 {len(bars)} 根K线）",
-            file=sys.stderr,
-        )
-        return _finalise(series, cache_paths["tencent"])
-    except MarketDataQualityError as exc:
-        tencent_error = exc
-        print(
-            f"[etf_market_data] {code}: 腾讯源数据质量问题 ({exc})，降级新浪源",
-            file=sys.stderr,
-        )
-    except Exception as exc:
-        tencent_error = exc
+            print(
+                f"[etf_market_data] {code}: 东方财富不可用，已回退至腾讯源"
+                f"（数据深度受限，约 {len(bars)} 根K线）",
+                file=sys.stderr,
+            )
+            return _finalise(series, cache_paths["tencent"])
+        except MarketDataQualityError as exc:
+            tencent_error = exc
+            print(
+                f"[etf_market_data] {code}: 腾讯源数据质量问题 ({exc})，降级新浪源",
+                file=sys.stderr,
+            )
+        except Exception as exc:
+            tencent_error = exc
+    else:
+        tencent_error = ConnectionError("按 ETF_DATA_SOURCE_ORDER 跳过腾讯源")
 
     # ══════════════════════════════════════════════════════════════════
     # STEP 4: Sina standalone fallback（不复权+折算修正，不处理分红）
     # ══════════════════════════════════════════════════════════════════
-    try:
-        sina_url = _sina_url(symbol, datalen=min(count, _SINA_MAX_DATALEN))
-        bars = _parse_sina(_request_sina_json(request, sina_url), symbol)
-        bars = _drop_incomplete_last_bar(bars)
-        if not bars:
-            raise ConnectionError("新浪未返回 K 线数据")
-        series = _make_series_standalone(
-            code, bars, "sina", _standalone(bars, "sina")
-        )
-        print(
-            f"[etf_market_data] {code}: 东财/腾讯均不可用，回退新浪源；"
-            f"新浪 ETF 序列不处理分红，分红标的历史可能不准",
-            file=sys.stderr,
-        )
-        return _finalise(series, cache_paths["sina"])
-    except MarketDataQualityError:
-        raise
-    except Exception as exc:
-        print(
-            f"[etf_market_data] {code}: 新浪源获取失败 ({exc})",
-            file=sys.stderr,
-        )
+    if "sina" in source_order:
+        try:
+            sina_url = _sina_url(symbol, datalen=min(count, _SINA_MAX_DATALEN))
+            bars = _parse_sina(_request_sina_json(request, sina_url), symbol)
+            bars = _drop_incomplete_last_bar(bars)
+            if not bars:
+                raise ConnectionError("新浪未返回 K 线数据")
+            series = _make_series_standalone(
+                code, bars, "sina", _standalone(bars, "sina")
+            )
+            print(
+                f"[etf_market_data] {code}: 东财/腾讯均不可用，回退新浪源；"
+                f"新浪 ETF 序列不处理分红，分红标的历史可能不准",
+                file=sys.stderr,
+            )
+            return _finalise(series, cache_paths["sina"])
+        except MarketDataQualityError:
+            raise
+        except Exception as exc:
+            print(
+                f"[etf_market_data] {code}: 新浪源获取失败 ({exc})",
+                file=sys.stderr,
+            )
 
     # ══════════════════════════════════════════════════════════════════
     # STEP 5: Last resort — newest valid stale cache
@@ -1127,8 +1383,8 @@ def load_etf_series(
         return best[2]
 
     raise ConnectionError(
-        f"前复权数据获取失败(东财/腾讯/新浪均不可用)且无合格 v2 缓存: {code}"
-    ) from (em_error or tencent_error)
+        f"前复权数据获取失败(同花顺/东财/腾讯/新浪均不可用)且无合格 v2 缓存: {code}"
+    ) from (ths_error or em_error or tencent_error)
 
 
 # ---------------------------------------------------------------------------

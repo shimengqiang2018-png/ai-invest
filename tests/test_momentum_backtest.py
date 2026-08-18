@@ -110,6 +110,22 @@ class BacktestExecutionTimelineTests(unittest.TestCase):
         self.assertEqual(result["trades"], [])
         self.assertEqual(result["performance"]["final_nav"], 100000.0)
 
+    def test_stop_loss_executes_sell_after_8pct_drop(self):
+        """持仓收盘跌破 8% 止损线后，次日开盘真正卖出（而非仅记录审计）。"""
+        bars = _make_flat_bars("A", "2023-01-02", 260, 10.0)
+        # 信号日 index=253，买入在 index=254 开盘价成交。
+        buy_open = bars[254]["open"]
+        entry_fill = round(buy_open * (1 + float(ExecutionConfig().slippage_rate)), 6)
+        # index=255 收盘砸到 entry 的 90%，跌破 8% 止损线（0.92 * entry）。
+        bars[255]["close"] = round(entry_fill * 0.90, 6)
+        bars[255]["low"] = bars[255]["close"]
+        # 买入后 A 持续通过信号，避免触发“无信号清仓”路径，隔离止损逻辑。
+        passed = {b["date"]: "A" for b in bars[253:]}
+        result = _run_with_signals({"A": bars}, passed)
+        actions = [t["action"] for t in result["trades"]]
+        self.assertIn("止损卖出", actions)
+        self.assertTrue(result["stop_loss_audit"])
+
     def test_missing_cross_section_bar_does_not_create_signal_order(self):
         """检查日缺少任一池成员正式 bar 时保持现金/持仓不动。"""
         bars_a = _make_flat_bars("A", "2023-01-02", 257, 10.0)

@@ -119,6 +119,7 @@ const state = {
   signalsSort: { key: null, dir: "desc" },
   parseResult: null,
   parseImages: [],
+  gridConfigImages: [],
   gridParseImages: [],
   dbOffset: 0,
 };
@@ -247,7 +248,8 @@ const PAGE_TITLES = {
   signals: "信号扫描",
   grid: "网格",
   backtest: "回测分析",
-  screener: "选品池",
+  screener: "动量选品池",
+  "grid-screener": "网格选品池",
   positions: "持仓",
   db: "数据存储",
   audit: "风险审计",
@@ -275,6 +277,7 @@ async function renderTab(name, force = false) {
     else if (name === "grid") await renderGrid(force);
     else if (name === "backtest") await renderBacktest(force);
     else if (name === "screener") await renderScreener(force);
+    else if (name === "grid-screener") await renderGridScreener();
     else if (name === "positions") await renderPositions();
     else if (name === "db") await renderDb();
     else if (name === "audit") await renderAudit(force);
@@ -287,6 +290,19 @@ async function renderTab(name, force = false) {
 /* ============================================================
  * 总览
  * ========================================================== */
+
+// 动量推荐置信度徽章：DSR 显著性 → 绿/黄/红/灰 tag
+function dsrConfidenceTag(conf) {
+  if (!conf || conf.significance_label == null) return "";
+  const label = conf.significance_label;
+  const cls = label.startsWith("显著") ? "strong"
+    : label.startsWith("边缘") ? "medium"
+    : label.startsWith("不显著") ? "unknown" : "none";
+  const title = conf.dsr_prob != null
+    ? `DSR=${conf.dsr_prob} · 年化${fmtPct(conf.annual_return_pct, 1)} · 超额${fmtPct(conf.excess_return_pct, 1)} · Sharpe${fmtNum(conf.sharpe, 2)}`
+    : "";
+  return `<span class="tag ${cls}" title="${esc(title)}">显著性 ${esc(label)}</span>`;
+}
 
 async function renderOverview(force = false) {
   const positionsP = !state.positions || force
@@ -307,6 +323,7 @@ async function renderOverview(force = false) {
 
   const [momLabel, momCls] = statusMeta(mom.status);
   const momSelected = mom.selected;
+  const momConf = mom.confidence || {};
   const asOf = mom.as_of || "—";
   $("#dataAsOf").textContent = `动量信号日期: ${asOf}`;
 
@@ -325,7 +342,7 @@ async function renderOverview(force = false) {
       k: "RSRS 目标",
       v: momSelected ? `${momSelected.code}` : "—",
       d: momSelected
-        ? `${momSelected.name} · ${momSelected.signal_strength || "none"}`
+        ? `${momSelected.name} · ${momSelected.signal_strength || "none"}${momConf.significance_label ? ` · 显著性 ${momConf.significance_label}` : ""}`
         : "—",
       cls: momSelected ? "up" : "",
     },
@@ -368,15 +385,15 @@ async function renderOverview(force = false) {
 
   const advice = ov.advice || {};
   const adviceRows = [
-    { t: "动量轮动", v: advice.momentum_action || "无正式动作", cls: "momentum" },
-    { t: "网格趋势", v: advice.grid_action || "无正式动作", cls: "grid" },
+    { t: "动量轮动", v: advice.momentum_action || "无正式动作", cls: "momentum", badge: dsrConfidenceTag(momConf) },
+    { t: "网格趋势", v: advice.grid_action || "无正式动作", cls: "grid", badge: "" },
   ];
   $("#ov-advice").innerHTML = adviceRows
     .map(
       (a) => `
       <div class="advice-row ${a.cls}">
         <div class="a-t">${esc(a.t)}</div>
-        <div>${esc(a.v)}</div>
+        <div>${esc(a.v)}${a.badge}</div>
       </div>`
     )
     .join("");
@@ -386,7 +403,7 @@ async function renderOverview(force = false) {
     ? `
     <table>
       <thead><tr>
-        <th>代码</th><th>名称</th><th>RSRS</th><th>年化斜率</th>
+        <th>代码</th><th>名称</th><th data-metric="rsrs">RSRS ⓘ</th><th data-metric="slope">年化斜率 ⓘ</th>
         <th>R²</th><th>信号</th><th>通过</th>
       </tr></thead>
       <tbody>
@@ -447,6 +464,10 @@ async function renderSignals(force) {
 
   const [label, cls] = statusMeta(sig.status);
   $("#dataAsOf").textContent = `动量信号日期: ${sig.as_of || "—"}`;
+  const intradayBadge = sig.intraday_prediction
+    ? '<span class="tag" style="background:#f59e0b22;color:#d97706;margin-left:8px">⏱ 14:30 盘中预测（当日临时信号）</span>'
+    : "";
+  $("#dataAsOf").innerHTML = `动量信号日期: ${esc(sig.as_of || "—")}${intradayBadge}`;
   $("#sig-note").textContent =
     `${sig.pool_label || ""} · 状态 ${label} · 数据完整 ${sig.pool_complete ? "是" : "否"}`;
   $("#sig-subtitle").textContent =
@@ -477,6 +498,7 @@ async function renderSignals(force) {
       </div>`;
   }
   $("#sig-advice").innerHTML = adviceHtml;
+  renderWalkForwardHint();
 
   const items = sig.items || [];
   const selectedCode = sig.selected && sig.selected.code;
@@ -501,6 +523,46 @@ async function renderSignals(force) {
   // 调试/自动化钩子: ?autosort=rsrs 时按指定列自动排序
   const autoSort = new URLSearchParams(location.search).get("autosort");
   if (autoSort) sortSignals(autoSort);
+}
+
+async function renderWalkForwardHint() {
+  const box = $("#sig-advice");
+  if (!box) return;
+  let wf = null;
+  try {
+    const body = await api("/api/walk-forward/latest", { quiet: true });
+    wf = body.data;
+  } catch {
+    wf = null;
+  }
+  const item = document.createElement("div");
+  item.className = "advice-item";
+  if (!wf || !(wf.candidates || []).length) {
+    item.innerHTML = `
+      <div class="a-k">样本外验证（Walk-Forward）</div>
+      <div class="a-v dim">尚未运行 · 在「回测分析 → 样本外验证」生成后，这里会自动显示结论</div>`;
+    box.appendChild(item);
+    return;
+  }
+  const follow = wf.follow_strategy || {};
+  const top = [...(wf.candidates || [])].sort(
+    (a, b) => (a.oos_rank ?? 999) - (b.oos_rank ?? 999)
+  )[0];
+  const excess = follow.excess_pct;
+  const cls = excess != null && excess > 0 ? "up" : "down";
+  item.innerHTML = `
+    <div class="a-k">样本外验证（Walk-Forward）</div>
+    <div class="a-v">
+      跟随策略样本外 <b class="${cls}">${fmtPct(follow.oos_total_pct, 1, true)}</b>
+      vs 等权基准 ${fmtPct(follow.benchmark_total_pct, 1, true)}
+      · 超额 ${fmtPct(excess, 1, true)}
+      · Sharpe ${follow.oos_sharpe != null ? fmtNum(follow.oos_sharpe) : "—"}
+      <div class="dim" style="font-size:12px">
+        ${top ? `样本外排名 #1：${esc(top.label)}（年化 ${top.oos_annual_pct != null ? fmtPct(top.oos_annual_pct, 1, true) : "—"}）` : ""}
+        · 验证于 ${(wf.generated_at || "").slice(0, 10) || "—"}
+      </div>
+    </div>`;
+  box.appendChild(item);
 }
 
 /* ============================================================
@@ -682,13 +744,14 @@ async function renderGrid(force) {
   $("#grid-subtitle").textContent = `${items.length} 只标的 · 刷新于 ${(grid.as_of || "").slice(0, 19).replace("T", " ")}`;
   $("#grid-note").textContent = "";
 
+  const gridScores = {};
   $("#grid-table").innerHTML = items.length
     ? `
     <table>
       <thead><tr>
         <th>代码</th><th>名称</th><th>现价</th><th>基准价</th>
         <th>买入触发</th><th>卖出触发</th><th>评分</th><th>BB宽</th>
-        <th>MA状态</th><th>判断</th><th>触发次数</th><th>最近触发</th>
+        <th>MA状态</th><th>判断</th><th>触发次数</th><th>最近触发</th><th>评分</th>
       </tr></thead>
       <tbody>
         ${items
@@ -710,8 +773,9 @@ async function renderGrid(force) {
               cur != null && buyPrice != null && cur <= buyPrice
                 ? '<span class="pass-no"> 买✓</span>'
                 : "";
+            gridScores[g.code] = g.scores || {};
             return `
-            <tr title="${esc(g.error || g.verdict || "")}">
+            <tr data-grid-score-code="${esc(g.code)}" title="${esc(g.error || g.verdict || "")}">
               <td>${esc(g.code)}</td>
               <td>${esc(g.name)}</td>
               <td class="num ${pctCls(g.change_pct)}">${fmtNum3(cur)}${hitSell}${hitBuy}</td>
@@ -724,20 +788,38 @@ async function renderGrid(force) {
               <td class="dim">${esc(g.verdict || g.error || "—")}</td>
               <td class="num">${g.trigger_count || 0}</td>
               <td class="num dim">${esc(lastText)}</td>
+              <td><button class="btn ghost" data-grid-score style="padding:4px 8px;font-size:12px">评分</button></td>
             </tr>`;
           })
           .join("")}
       </tbody>
     </table>`
     : '<div class="empty">暂无网格配置（tools/grid_trading.py CONFIGS 为空）</div>';
+  state.gridScores = gridScores;
+  $$("#grid-table [data-grid-score]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const tr = btn.closest("tr[data-grid-score-code]");
+      gridScoreDetail(tr, tr.dataset.gridScoreCode);
+    });
+  });
 
-  const positions = grid.positions || [];
-  const totalMv = positions.reduce((s, p) => s + (p.market_value || 0), 0);
-  const totalPnl = positions.reduce((s, p) => s + (p.pnl || 0), 0);
-  $("#grid-positions-summary").textContent = positions.length
-    ? `${positions.length} 只 · 总市值 ¥${fmtNum(totalMv, 2)} · 浮动盈亏 ${
+  let positions = grid.positions || [];
+  try {
+    // 网格持仓详情：单独实时查库（不经 5 分钟总览缓存）
+    const posBody = await api("/api/grid/positions", { quiet: true });
+    if (posBody.data && posBody.data.positions) {
+      positions = posBody.data.positions;
+    }
+  } catch (err) {
+    /* 实时接口失败时回退总览缓存数据 */
+  }
+  const held = positions.filter((p) => (p.total_shares || 0) > 0);
+  const totalMv = held.reduce((s, p) => s + (p.market_value || 0), 0);
+  const totalPnl = held.reduce((s, p) => s + (p.pnl || 0), 0);
+  $("#grid-positions-summary").textContent = held.length
+    ? `${held.length} 只持仓 · 总市值 ¥${fmtNum(totalMv, 2)} · 浮动盈亏 ${
         totalPnl >= 0 ? "+" : ""
-      }¥${fmtNum(totalPnl, 2)}`
+      }¥${fmtNum(totalPnl, 2)}（网格配置 ${positions.length} 只）`
     : "暂无网格持仓";
   $("#grid-positions").innerHTML = positions.length
     ? `
@@ -790,8 +872,46 @@ async function renderGrid(force) {
       $("#grid-trigger-time").value = new Date().toTimeString().slice(0, 5);
     }
   }
-  await loadModelProviders("grid-trigger-provider");
+  await loadModelProviders();
   await loadGridTriggers();
+  await renderGridConfigList();
+}
+
+function gridScoreDetail(tr, code) {
+  const existing = tr.nextElementSibling;
+  if (existing && existing.classList && existing.classList.contains("grid-score-detail")) {
+    existing.remove();
+    return;
+  }
+  const s = (state.gridScores || {})[code] || {};
+  const tg = s.trigger || {};
+  const row = (label, value, cls = "") =>
+    `<tr><td>${esc(label)}</td><td class="num ${cls}">${value}</td></tr>`;
+  const detail = document.createElement("tr");
+  detail.className = "grid-score-detail";
+  detail.innerHTML = `<td colspan="13">
+    <div class="panel-title">多维度评分 · ${esc(code)}</div>
+    <table>
+      <tbody>
+        ${row("趋势评分", s.trend ?? "—",
+          s.trend != null && s.trend > 0 ? "up" : s.trend != null && s.trend < 0 ? "down" : "")}
+        ${row("网格适配评分", s.grid != null ? `${s.grid}/21` : "—",
+          s.grid != null && s.grid >= 15 ? "up" : s.grid != null && s.grid < 10 ? "down" : "")}
+        ${row("动量RSRS", s.rsrs ?? "—",
+          s.rsrs != null && s.rsrs > 0 ? "up" : s.rsrs != null && s.rsrs < 0 ? "down" : "")}
+        ${row("动量信号", s.momentum ?? "—")}
+        ${row("年化波动%", s.vol20 ?? "—")}
+        ${row("RSI", s.rsi ?? "—")}
+        ${row("20日趋势%", s.trend20 ?? "—")}
+        ${row("BB宽度%", s.bb_width ?? "—")}
+        ${row("触发次数", tg.count ?? "—")}
+        ${row("日均触发", tg.freq ?? "—")}
+        ${row("最近方向链", tg.chain ?? "—")}
+        ${row("触发判断", tg.verdict ?? "—")}
+      </tbody>
+    </table>
+  </td>`;
+  tr.after(detail);
 }
 
 async function loadGridTriggers() {
@@ -1111,6 +1231,879 @@ async function confirmGridTriggers() {
   }
 }
 
+/* ============================================================
+ * 网格配置：截图识别 → 核对 → 参数寻优 → 保存
+ * ============================================================ */
+
+async function parseGridConfigs() {
+  const files = state.gridConfigImages || [];
+  if (!files.length) {
+    toast("请先选择配置截图", true);
+    return;
+  }
+  const provider = $("#grid-config-provider").value;
+  if (!provider) {
+    toast("未配置可用识别模型", true);
+    return;
+  }
+  try {
+    $("#grid-config-note").textContent = "解析中（模型调用可能需要 10-60 秒）…";
+    const body = await api("/api/grid/configs/parse", {
+      method: "POST",
+      body: { provider, images: files },
+      timeoutMs: 120000,
+    });
+    $("#grid-config-note").textContent =
+      `解析完成（${body.data.pipeline === "vision" ? "视觉模型" : "本地OCR+模型"}），` +
+      `共 ${body.data.configs.length} 条配置，请核对后可「参数寻优」，确认后保存`;
+    renderGridConfigResult(body.data.configs);
+  } catch (err) {
+    $("#grid-config-note").textContent = "";
+    toast("解析失败: " + err.message, true);
+  }
+}
+
+async function renderGridConfigList() {
+  try {
+    const body = await api("/api/grid/configs", { quiet: true });
+    const configs = body.data.configs || [];
+    state.savedGridConfigs = {};
+    configs.forEach((c) => {
+      state.savedGridConfigs[c.code] = c;
+    });
+    $("#grid-configs-count").textContent = `共 ${configs.length} 条`;
+    $("#grid-configs-list").innerHTML = configs.length
+      ? `
+      <table>
+        <thead><tr>
+          <th>代码</th><th>名称</th><th>策略</th><th>基准价</th>
+          <th>上间距%</th><th>下间距%</th><th>区间低</th><th>区间高</th>
+          <th>卖出委托</th><th>买入委托</th><th>每格份</th>
+          <th>下限份</th><th>上限份</th><th>层数</th><th>状态</th>
+          <th>上次寻优</th><th>优化</th>
+        </tr></thead>
+        <tbody>
+          ${configs.map((c) => `
+            <tr title="${esc(c.note || "")}">
+              <td>${esc(c.code)}</td>
+              <td>${esc(c.name || "—")}</td>
+              <td>${esc(c.strategy_type || "—")}</td>
+              <td class="num">${fmtNum3(c.base_price)}</td>
+              <td class="num">${c.spacing_up_pct ?? "—"}</td>
+              <td class="num">${c.spacing_down_pct ?? "—"}</td>
+              <td class="num">${fmtNum3(c.price_low)}</td>
+              <td class="num">${fmtNum3(c.price_high)}</td>
+              <td class="dim">${esc(c.order_type_sell || "—")}</td>
+              <td class="dim">${esc(c.order_type_buy || "—")}</td>
+              <td class="num">${c.shares_per_grid ?? "—"}</td>
+              <td class="num">${c.base_position ?? "—"}</td>
+              <td class="num">${c.max_position ?? "—"}</td>
+              <td class="num">${c.levels_above != null ? `${c.levels_above}+${c.levels_below ?? 0}` : "—"}</td>
+              <td>${esc(c.status || "—")}</td>
+              <td class="num">${c.last_opt
+                ? `${c.last_opt.spacing}%/${c.last_opt.levels}层/${c.last_opt.shares}股<br><span class="dim">年化 ${fmtPct(c.last_opt.annual_return_pct, 1)} · ${(c.last_opt_at || "").slice(0, 10)}</span>`
+                : '<span class="dim">—</span>'}</td>
+              <td><button class="btn ghost" data-grid-opt="${esc(c.code)}" style="padding:4px 8px;font-size:12px">优化</button></td>
+            </tr>`).join("")}
+        </tbody>
+      </table>`
+      : '<div class="empty">暂无已保存配置（保存后显示在这里）</div>';
+    $$("#grid-configs-list [data-grid-opt]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const code = btn.dataset.gridOpt;
+        const tr = btn.closest("tr");
+        gridConfigOptimizeRow(code, tr);
+      });
+    });
+  } catch (err) {
+    $("#grid-configs-list").innerHTML =
+      `<div class="empty">读取配置失败: ${esc(err.message)}</div>`;
+  }
+}
+
+async function gridConfigOptimizeRow(code, tr) {
+  // 已展开则收起
+  const existing = tr.nextElementSibling;
+  if (existing && existing.classList && existing.classList.contains("grid-opt-detail")) {
+    existing.remove();
+    return;
+  }
+  const detail = document.createElement("tr");
+  detail.className = "grid-opt-detail";
+  detail.innerHTML = `<td colspan="16"><div class="dim">参数寻优中（回测约需 10-60 秒）…</div></td>`;
+  tr.after(detail);
+  const cfg = (state.savedGridConfigs || {})[code] || {};
+  try {
+    // 资金以当前持仓金额为准
+    let optCapital = 100000;
+    let capitalNote = "当前无持仓，按默认 ¥100,000 优化";
+    try {
+      const posBody = await api("/api/grid/positions", { quiet: true });
+      const pos = (posBody.data.positions || []).find((p) => p.code === code);
+      if (pos && pos.market_value > 0) {
+        optCapital = Math.round(pos.market_value);
+        capitalNote = `按当前持仓金额 ¥${fmtNum(optCapital, 0)} 优化`;
+      }
+    } catch (err) { /* 持仓取不到时用默认资金 */ }
+    const body = await api(
+      `/api/grid/optimize?codes=${encodeURIComponent(code)}&capital=${optCapital}`,
+      {
+      timeoutMs: 180000,
+      }
+    );
+    const best = (body.data.best_per_code || {})[code];
+    const top = (body.data.results || [])
+      .filter((r) => r.code === code)
+      .slice(0, 5);
+    if (!best) {
+      detail.innerHTML = `<td colspan="16"><div class="empty">无寻优结果（可能数据不足）</div></td>`;
+      return;
+    }
+    const params = body.data.params || {};
+    const startLabel =
+      params.start === "3y" ? "近 3 年"
+      : params.start === "5y" ? "近 5 年"
+      : params.start === "full" ? "全部(2018起)"
+      : "近 2 年";
+    const paramText =
+      `${capitalNote} · 区间 ${startLabel} · 资金 ¥${fmtNum(params.capital || 0, 0)} · ` +
+      `间距候选 ${(params.spacings || []).join("/")}% · ` +
+      `层数候选 ${(params.levels || []).join("/")} · ` +
+      `每格金额候选 ${(params.grid_values || []).join("/")}元（折算股数）`;
+    const currentSpacing =
+      cfg.spacing_up_pct != null && cfg.spacing_down_pct != null &&
+      cfg.spacing_up_pct !== cfg.spacing_down_pct
+        ? `${cfg.spacing_up_pct}/${cfg.spacing_down_pct}`
+        : (cfg.spacing_up_pct ?? "—");
+    const compareRows = [
+      ["间距%", currentSpacing, best.spacing],
+      ["层数(上/下)", cfg.levels_above != null ? `${cfg.levels_above}+${cfg.levels_below ?? 0}` : "—", `${best.levels}+${best.levels}`],
+      ["每格份数", cfg.shares_per_grid ?? "—", best.shares],
+      ["每格金额(元)", cfg.base_price != null && cfg.shares_per_grid != null
+        ? fmtNum(cfg.base_price * cfg.shares_per_grid, 0)
+        : "—", best.grid_value != null ? fmtNum(best.grid_value, 0) : "—"],
+      ["持仓范围(份)", cfg.base_position != null || cfg.max_position != null
+        ? `${cfg.base_position ?? "—"}~${cfg.max_position ?? "—"}`
+        : "—",
+        best.position_range
+          ? `${best.position_range.min}~${best.position_range.max}`
+          : "—"],
+      ["年化收益%", "—", best.annual_return_pct != null ? fmtPct(best.annual_return_pct, 2) : "—"],
+      ["最大回撤%", "—", best.max_dd_pct != null ? fmtPct(best.max_dd_pct, 2) : "—"],
+      ["Sharpe", "—", best.sharpe != null ? fmtNum(best.sharpe, 2) : "—"],
+      ["胜率%", "—", best.win_rate_pct != null ? fmtPct(best.win_rate_pct, 1) : "—"],
+    ];
+    detail.innerHTML = `<td colspan="16">
+      <div class="panel-title">优化建议 · ${esc(code)} ${esc(cfg.name || "")}
+        <span class="panel-sub">按年化收益排序（前 ${top.length} 组）</span>
+        <button class="btn mini" data-opt-collapse style="float:right">收起</button>
+      </div>
+      <div class="dim" style="margin:6px 0">${esc(paramText)}</div>
+      <table>
+        <thead><tr><th>参数</th><th>当前配置</th><th>优化建议</th></tr></thead>
+        <tbody>
+          ${compareRows.map(([k, cur, opt]) => `
+            <tr><td>${k}</td><td class="num">${cur}</td><td class="num ${k === "最大回撤%" ? "down" : "up"}"><b>${opt}</b></td></tr>`).join("")}
+        </tbody>
+      </table>
+      ${top.length ? `
+        <div class="dim" style="margin-top:6px">Top 候选（间距%/层数/股数/年化%）：</div>
+        <div class="dim">${top.map((r) => `${r.spacing}%/${r.levels}层/${r.shares}股 ${fmtPct(r.annual_return_pct, 1)}`).join("；")}</div>` : ""}
+      <div class="toolbar">
+        <button class="btn" data-opt-apply>应用优化参数（更新保存）</button>
+        <button class="btn" data-advise>重新研判</button>
+        <span class="muted">应用后基准价/区间/委托方式保持不变；间距/层数/每格/持仓范围按候选更新</span>
+      </div>
+      <div id="grid-config-advise-result" style="margin-top:10px"></div>
+    </td>`;
+    detail.querySelector("[data-opt-collapse]").addEventListener("click", () => {
+      detail.remove();
+    });
+    detail.querySelector("[data-opt-apply]").addEventListener("click", async () => {
+      const updated = {
+        ...cfg,
+        spacing_up_pct: best.spacing,
+        spacing_down_pct: best.spacing,
+        levels_above: best.levels,
+        levels_below: best.levels,
+        shares_per_grid: best.shares,
+        ...(best.position_range
+          ? {
+              base_position: best.position_range.min,
+              max_position: best.position_range.max,
+            }
+          : {}),
+        strategy_type: cfg.strategy_type || "网格交易",
+        status: cfg.status || "active",
+      };
+      try {
+        const resp = await api("/api/grid/configs/update", {
+          method: "POST",
+          body: { configs: [updated] },
+          timeoutMs: 30000,
+        });
+        toast(`已应用优化参数与持仓范围并保存（${resp.data.saved} 条）`);
+        await renderGridConfigList();
+      } catch (err) {
+        toast("应用失败: " + err.message, true);
+      }
+    });
+    const adviseBtn = detail.querySelector("[data-advise]");
+    if (adviseBtn) {
+      adviseBtn.addEventListener("click", () => {
+        const box = detail.querySelector("#grid-config-advise-result");
+        gridConfigAdvise(code, cfg, top, box);
+      });
+    }
+    // 每次寻优后自动调用大模型研判（结合市场环境给出适配配置）
+    gridConfigAdvise(
+      code,
+      cfg,
+      top,
+      detail.querySelector("#grid-config-advise-result")
+    );
+  } catch (err) {
+    detail.innerHTML = `<td colspan="16"><div class="empty">寻优失败: ${esc(err.message)}</div></td>`;
+  }
+}
+
+async function gridConfigAdvise(code, cfg, top, box) {
+  box.innerHTML = '<div class="dim">大模型研判中（约 10-30 秒）…</div>';
+  try {
+    const providerSel = $("#grid-config-provider");
+    const provider = providerSel ? providerSel.value : "";
+    const body = await api("/api/grid/configs/advise", {
+      method: "POST",
+      body: { code, provider, top, current_config: cfg },
+      timeoutMs: 120000,
+    });
+    const d = body.data;
+    const rec = d.recommended_config || {};
+    const sameBadge = d.same_as_backtest
+      ? '<span class="pass-yes">与回测最优一致</span>'
+      : '<span class="pass-no">已偏离回测最优</span>';
+    const ta = d.trigger_analysis || {};
+    const tradesHtml = (ta.recent_trades || []).length
+      ? `<details style="margin-top:4px">
+           <summary class="dim" style="cursor:pointer">最近30天成交记录（${ta.recent_trades.length} 条）</summary>
+           <table style="margin-top:4px">
+             <thead><tr><th>日期</th><th>时间</th><th>方向</th><th>类型</th><th>价格</th><th>数量</th></tr></thead>
+             <tbody>
+               ${ta.recent_trades.map((t) => {
+                 const sell = String(t.action || "").includes("卖");
+                 return `
+                 <tr>
+                   <td class="num">${esc(t.date || "")}</td>
+                   <td class="num">${esc(t.time || "—")}</td>
+                   <td class="${sell ? "down" : "up"}">${sell ? "卖" : "买"}</td>
+                   <td class="dim">${esc(t.type || "grid")}</td>
+                   <td class="num">${t.price}</td>
+                   <td class="num">${t.shares}</td>
+                 </tr>`;
+               }).join("")}
+             </tbody>
+           </table>
+         </details>`
+      : "";
+    const taHtml = ta.has_triggers
+      ? `<div class="panel-title" style="margin-top:8px">触发记录分析 · ${esc(code)}</div>
+         <div class="dim">共 ${ta.count} 条 · 网格自动 ${ta.grid_count} 条（买 ${ta.buys} / 卖 ${ta.sells}）
+           ${ta.add_count ? `· 主动加仓 ${ta.add_count} 条` : ""}
+           ${ta.reduce_count ? `· 主动减仓 ${ta.reduce_count} 条` : ""}
+           <br>网格跨度 ${ta.span_days} 天 · 日均 ${ta.freq_per_day} 次
+           · 最近网格链 ${esc(ta.recent_chain || "—")}
+           · 网格买均价 ${ta.avg_buy ?? "—"} / 卖均价 ${ta.avg_sell ?? "—"}
+           ${ta.grid_shares ? `· 网格累计 ${ta.grid_shares} 股` : ""}</div>
+         ${(ta.notes || []).map((n) => `<div class="dim" style="margin-top:2px">ℹ ${esc(n)}</div>`).join("")}
+         ${tradesHtml}
+         <div class="${ta.issues && ta.issues.length ? "down" : "up"}" style="margin-top:4px">
+           ${ta.issues && ta.issues.length ? esc(ta.issues.join("；")) : esc(ta.verdict || "")}
+         </div>`
+      : `<div class="dim" style="margin-top:6px">暂无触发记录，无法评估实际触发行为</div>`;
+    const factorHtml = (d.factors || [])
+      .map((f) => `
+        <tr>
+          <td>${esc(f.factor || "")}</td>
+          <td class="${f.impact === "利好" ? "up" : f.impact === "利空" ? "down" : "dim"}">${esc(f.impact || "—")}</td>
+          <td class="dim">${esc(f.detail || "")}</td>
+        </tr>`)
+      .join("");
+    box.innerHTML = `
+      <div class="panel-title">大模型市场研判 · ${esc(code)}
+        <span class="panel-sub">宏观 / 地缘 / 周期 / 汇率等影响因子</span>
+      </div>
+      <div class="advice-item"><div class="a-k">市场判断</div>
+        <div class="a-v">${esc(d.market_verdict || "—")}（信心 ${d.confidence != null ? Math.round(d.confidence * 100) : "—"}%）</div></div>
+      <div class="advice-item"><div class="a-k">方向评估</div>
+        <div class="a-v">${esc(d.direction_assessment || "—")}</div></div>
+      <div class="advice-item"><div class="a-k">与回测最优的关系</div>
+        <div class="a-v">${sameBadge}
+          <span class="dim" style="margin-left:4px">${esc(d.deviation_note || "")}</span></div></div>
+      <table>
+        <thead><tr><th>因素</th><th>影响</th><th>说明</th></tr></thead>
+        <tbody>${factorHtml || '<tr><td colspan="3" class="dim">无</td></tr>'}</tbody>
+      </table>
+      ${taHtml}
+      <div class="panel-title" style="margin-top:8px">建议配置</div>
+      <div>间距 <b>${rec.spacing_up_pct ?? "—"}%</b>/<b>${rec.spacing_down_pct ?? "—"}%</b>
+        · 层数 <b>${rec.levels_above ?? "—"}+${rec.levels_below ?? "—"}</b>
+        · 每格 <b>${rec.shares_per_grid ?? "—"}</b> 股
+        · 持仓 <b>${rec.base_position ?? "—"}~${rec.max_position ?? "—"}</b></div>
+      <div class="dim" style="margin-top:4px">${esc(d.reasoning || "")}</div>
+      ${(d.risks || []).length ? `<div class="down" style="margin-top:4px">风险：${esc((d.risks || []).join("；"))}</div>` : ""}
+      <div class="toolbar">
+        <button class="btn" data-advise-apply>应用建议配置（更新保存）</button>
+      </div>
+      <details style="margin-top:8px">
+        <summary class="dim" style="cursor:pointer">对话注释（输入上下文 + 模型原文）</summary>
+        <div style="white-space:pre-wrap;font-size:12px;margin-top:4px">
+          <span class="dim">【输入给模型】</span>
+${esc(d.input_context || "")}
+        </div>
+        <div style="white-space:pre-wrap;font-size:12px;margin-top:6px">
+          <span class="dim">【模型返回原文】</span>
+${esc(d.raw_text || "")}
+        </div>
+      </details>`;
+    box.querySelector("[data-advise-apply]").addEventListener("click", async () => {
+      const updated = {
+        ...cfg,
+        ...rec,
+        strategy_type: cfg.strategy_type || "网格交易",
+        status: cfg.status || "active",
+      };
+      try {
+        await api("/api/grid/configs/update", {
+          method: "POST",
+          body: { configs: [updated] },
+          timeoutMs: 30000,
+        });
+        toast("已应用大模型建议配置并保存");
+        await renderGridConfigList();
+      } catch (err) {
+        toast("应用失败: " + err.message, true);
+      }
+    });
+  } catch (err) {
+    box.innerHTML = `<div class="empty">研判失败: ${esc(err.message)}</div>`;
+  }
+}
+
+/* ============================================================
+ * 网格选品池：全市场 ETF/LOF 适配评分
+ * ============================================================ */
+
+async function renderGridScreener() {
+  const type = $("#grid-screener-type").value;
+  const t0 = $("#grid-screener-t0").value;
+  const category = $("#grid-screener-category").value;
+  const minSize = $("#grid-screener-size").value || "0";
+  const minScore = $("#grid-screener-score").value || "0";
+  const minVol = $("#grid-screener-vol-min").value || "";
+  const maxVol = $("#grid-screener-vol-max").value || "";
+  const minAmount = $("#grid-screener-amount").value || "0";
+  const maxTrend = $("#grid-screener-trend").value || "";
+  const minAmplitude = $("#grid-screener-amplitude").value || "0";
+  const maxDd = $("#grid-screener-drawdown").value || "";
+  const trendScore = $("#grid-screener-trend-score").value || "";
+  const sort = $("#grid-screener-sort").value;
+  $("#grid-screener-note").textContent = "筛选中…";
+  try {
+    const body = await api(
+      `/api/grid/screener?category=${encodeURIComponent(category)}` +
+      `&lof=${type === "lof" ? "1" : "0"}&t0=${t0}&min_size=${minSize}` +
+      `&min_score=${minScore}&min_vol=${minVol}&max_vol=${maxVol}` +
+      `&min_amount=${minAmount}&max_trend=${maxTrend}` +
+      `&min_amplitude=${minAmplitude}&max_dd=${maxDd}` +
+      `&trend_min=${trendScore}&sort=${sort}`,
+      { quiet: true }
+    );
+    const rows = body.data.rows || [];
+    const cats = body.data.categories || [];
+    const catSel = $("#grid-screener-category");
+    if (catSel && !catSel.dataset.loaded) {
+      catSel.dataset.loaded = "1";
+      catSel.innerHTML =
+        '<option value="">全部</option>' +
+        cats.map((c) => `<option value="${esc(c)}">${esc(c)}</option>`).join("");
+    }
+    $("#grid-screener-note").textContent =
+      `共 ${body.data.total} 只（显示前 300，评分≥${minScore}）`;
+    $("#grid-screener-result").innerHTML = rows.length
+      ? `
+      <table>
+        <thead><tr>
+          <th data-metric="code">代码 ⓘ</th><th data-metric="name">名称 ⓘ</th>
+          <th data-metric="type">类型 ⓘ</th><th data-metric="t0">T+0 ⓘ</th>
+          <th data-metric="category">类别 ⓘ</th><th data-metric="close">现价 ⓘ</th>
+          <th data-metric="vol">波动% ⓘ</th><th data-metric="trend_score">趋势评分 ⓘ</th>
+          <th data-metric="trend20">20日趋势% ⓘ</th><th data-metric="amplitude">振幅% ⓘ</th>
+          <th data-metric="bb">BB宽% ⓘ</th><th data-metric="rsi">RSI ⓘ</th>
+          <th data-metric="amount">成交额万 ⓘ</th><th data-metric="size">规模亿 ⓘ</th>
+          <th data-metric="dd">回撤% ⓘ</th><th data-metric="grid_score">评分 ⓘ</th>
+          <th>操作</th>
+        </tr></thead>
+        <tbody>
+          ${rows.map((r) => `
+            <tr data-screen-code="${esc(r.code)}">
+              <td>${esc(r.code)}</td>
+              <td>${esc(r.name)}</td>
+              <td>${esc(r.type)}</td>
+              <td>${r.t0 ? '<span class="pass-yes">T+0</span>' : '<span class="dim">T+1</span>'}</td>
+              <td class="dim">${esc(r.subcategory || r.category || "—")}</td>
+              <td class="num">${r.close != null ? fmtNum3(r.close) : "—"}</td>
+              <td class="num">${r.vol_pct ?? "—"}</td>
+              <td class="num ${r.trend_score != null && r.trend_score > 0 ? "up" : r.trend_score != null && r.trend_score < 0 ? "down" : ""}">${r.trend_score ?? "—"}</td>
+              <td class="num ${pctCls(r.trend20_pct)}">${r.trend20_pct ?? "—"}</td>
+              <td class="num">${r.amplitude ?? "—"}</td>
+              <td class="num">${r.bb_width ?? "—"}</td>
+              <td class="num">${r.rsi ?? "—"}</td>
+              <td class="num">${r.avg_amount_wan != null ? fmtNum(r.avg_amount_wan, 0) : "—"}</td>
+              <td class="num">${r.fund_size_yi}</td>
+              <td class="num">${r.max_dd_pct ?? "—"}</td>
+              <td class="num ${r.grid_score >= 15 ? "up" : r.grid_score >= 11 ? "" : "down"}"><b>${r.grid_score}</b></td>
+              <td><button class="btn ghost" data-grid-screen-opt style="padding:4px 8px;font-size:12px">寻优</button></td>
+            </tr>`).join("")}
+        </tbody>
+      </table>`
+      : '<div class="empty">无符合条件的标的（可降低评分/规模门槛）</div>';
+    $$("#grid-screener-result [data-grid-screen-opt]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const tr = btn.closest("tr[data-screen-code]");
+        gridScreenOptimize(tr.dataset.screenCode, tr.querySelector("td:nth-child(2)").textContent, tr);
+      });
+    });
+    bindMetricHints();
+  } catch (err) {
+    $("#grid-screener-note").textContent = "";
+    $("#grid-screener-result").innerHTML =
+      `<div class="empty">筛选失败: ${esc(err.message)}</div>`;
+  }
+}
+
+// 全页面指标说明字典：key 与各表格 <th data-metric="key"> 对应。点击表头的「ⓘ」弹出说明。
+const METRIC_HELP = {
+  // ── 网格选品池 ──
+  code: "证券代码（6 位）。",
+  name: "基金名称。",
+  type: "ETF 或 LOF（按代码规则判断：16xxxx / 501-506 为 LOF，其余为 ETF）。",
+  t0: "是否支持 T+0 交易。跨境/商品/债券/货币基金 T+0，A股股票 ETF/LOF 为 T+1。T+0 可日内进出，网格更灵活（评分 +1）。",
+  category: "资产类别：A股宽基 / A股行业 / 跨境ETF / 商品ETF / 债券ETF / 货币基金。",
+  close: "最新收盘价（来自 K 线缓存）。",
+  vol: "年化波动率：近 20 日收益率标准差 × √252。年化 15-35% 是网格甜区（评分 5 分）。",
+  trend_score: "趋势评分（-5 空头 ~ +5 多头）：按 MA20/MA60 排列 + 20 日趋势估算。震荡偏弱适合网格，单边空头不适合。",
+  trend20: "近 20 个交易日涨跌幅（%）。|趋势| 越小越偏震荡，网格越有利。",
+  amplitude: "每日振幅：近 60 日平均（最高价−最低价）÷ 昨收 × 100%，衡量日内震荡幅度与网格触发机会。",
+  bb: "布林带宽度：4×σ(20) ÷ MA20 × 100%，衡量波动带宽与均值回归空间。",
+  rsi: "RSI14 相对强弱指标。极端超买（>70）/超卖（<30）提示短期反转风险。",
+  amount: "日均成交额（万元）：按近 60 日成交量 × 价格 × 100 估算，衡量流动性。",
+  size: "基金规模（亿元），来自 ETF 元数据。规模越大流动性/清盘风险越低。",
+  dd: "历史最大回撤（%），来自全市场回测。网格需控制单边深跌风险，回撤越小越稳。",
+  grid_score: "网格适配评分（满分 21）：波动率甜区 5 + 流动性 5 + 均值回归 5 + 回撤可控 5 + T+0 加分 1。",
+
+  // ── 通用绩效指标 ──
+  annual: "年化收益率：把区间总收益折算成一年，便于跨不同时长比较。=(1+总收益)^(365/区间天数)−1。",
+  total: "区间总收益率：期末权益 ÷ 期初本金 − 1，未年化。",
+  max_dd: "最大回撤：区间内权益从峰值到谷底的最大跌幅，衡量最坏情况下的亏损深度。",
+  sharpe: "夏普比率：年化超额收益 ÷ 年化波动（无风险利率 ≈2%）。>1 良好，>2 优秀。",
+  sortino: "Sortino 比率：年化超额收益 ÷ 下行波动，只惩罚下行风险。",
+  calmar: "卡玛比率：年化收益 ÷ 最大回撤。>1 表示年化收益能覆盖最大回撤。",
+  dsr: "DSR 显著性概率：扣除「从 N 组里选最优」的运气成分后，该组合仍显著优于纯运气的概率。>0.95 显著；但只校正采样运气，不校正样本内 regime 依赖——最终以样本外验证为准。",
+  win_rate: "胜率：盈利卖出交易数 ÷ 总卖出交易数。",
+  trades: "交易次数：区间内买入 + 卖出总次数。",
+  excess: "超额 α：策略年化收益 − 买入持有基准年化。>0 表示跑赢无脑持有。",
+  benchmark: "基准年化：买入持有（B&H）基准的年化收益，作对照。",
+  grade: "等级：综合 Sharpe / 胜率 / 盈亏比打的 A+~F 评级。",
+  annual_vol: "年化波动：日收益率标准差 × √252，衡量风险。",
+
+  // ── 样本外验证（Walk-Forward）──
+  oos_total: "样本外总收益：Walk-Forward 各折测试段拼接后的总收益（选参时未用到的数据，更能反映真实可复制性）。",
+  oos_annual: "样本外年化：样本外总收益折算的年化。",
+  oos_sharpe: "样本外夏普：样本外测试段收益的夏普比率。",
+  selected: "被选中次数：该组合在 Walk-Forward 各折 train 段被选为最优的次数 / 总折数。越高说明入选越稳定。",
+
+  // ── 网格参数 ──
+  spacing: "间距%：每格涨跌百分比，网格触发买卖的步长。",
+  levels: "层数：基准价上下各挂几层。",
+  shares: "每格股数：每层委托股数。",
+  grid_value: "每格金额：每层资金（股数 × 基准价）。",
+  position_range: "持仓范围：底仓到满仓的股数区间。",
+  base_price: "基准价：网格中枢价，围绕它上下挂层。",
+  price_range: "价格区间：网格覆盖的最低 ~ 最高价。",
+  buy_sell: "买/卖：区间内买入与卖出触发次数。",
+
+  // ── 动量 / 全市场 ──
+  rsrs: "RSRS：阻力支撑相对强度，动量信号的核心指标。",
+  slope: "年化斜率：RSRS 回归斜率的年化值。",
+  signal_wr10: "信号胜率 10d：突破信号出现后 10 个交易日上涨的比例。",
+  signal_wr20: "信号胜率 20d：突破信号出现后 20 个交易日上涨的比例。",
+  composite: "综合评分：多维打分加权合计（0-100，越高越优；具体维度因模块而异）。",
+  cagr: "CAGR：复合年化增长率（Compound Annual Growth Rate），即区间年化收益率。",
+  ic: "IC：信息系数（Information Coefficient），因子预测值与未来收益的秩相关，衡量因子有效性。",
+  ir: "IR：信息比率（Information Ratio），IC 均值 ÷ IC 标准差，衡量因子稳定度。",
+  forward_window: "前向窗口：因子信号后观察未来收益的持有期长度。",
+  asset_dd: "资产回撤：该情景下资产（买入持有）的区间最大回撤。",
+  strat_return: "策略收益：该情景下策略的区间收益，与资产回撤对照看抗跌能力。",
+};
+
+function bindMetricHints() {
+  let popup = document.getElementById("metric-popup");
+  if (!popup) {
+    popup = document.createElement("div");
+    popup.id = "metric-popup";
+    popup.style.cssText =
+      "position:fixed;z-index:9999;max-width:340px;padding:10px 12px;" +
+      "background:#fff;border:1px solid #d4d4d8;border-radius:8px;" +
+      "box-shadow:0 4px 16px rgba(0,0,0,.18);font-size:12.5px;line-height:1.55;" +
+      "color:#27272a;display:none;";
+    document.body.appendChild(popup);
+  }
+  // 事件委托：任意带 data-metric 的表头点击即弹说明，动态渲染的表格无需重复绑定。
+  if (bindMetricHints._bound) return;
+  bindMetricHints._bound = true;
+  document.addEventListener("click", (ev) => {
+    const th = ev.target.closest("th[data-metric]");
+    if (th) {
+      const text = METRIC_HELP[th.dataset.metric];
+      popup.textContent = text || th.textContent;
+      const rect = th.getBoundingClientRect();
+      popup.style.display = "block";
+      popup.style.left = Math.min(rect.left, window.innerWidth - popup.offsetWidth - 12) + "px";
+      popup.style.top = (rect.bottom + 8) + "px";
+    } else if (!ev.target.closest("#metric-popup")) {
+      popup.style.display = "none";
+    }
+  });
+  document.addEventListener("mouseover", (ev) => {
+    const th = ev.target.closest("th[data-metric]");
+    if (th) th.style.cursor = "pointer";
+  });
+}
+
+async function gridScreenOptimize(code, name, tr) {
+  const existing = tr.nextElementSibling;
+  if (existing && existing.classList && existing.classList.contains("grid-screen-detail")) {
+    existing.remove();
+    return;
+  }
+  const detail = document.createElement("tr");
+  detail.className = "grid-screen-detail";
+  detail.innerHTML = `<td colspan="17"><div class="dim">寻优中（约 10-60 秒）…</div></td>`;
+  tr.after(detail);
+  try {
+    const body = await api(`/api/grid/optimize?codes=${encodeURIComponent(code)}`, {
+      timeoutMs: 180000,
+    });
+    const best = (body.data.best_per_code || {})[code];
+    if (!best) {
+      detail.innerHTML = `<td colspan="17"><div class="empty">无寻优结果</div></td>`;
+      return;
+    }
+    const pr = best.position_range || {};
+    const params = body.data.params || {};
+    const startLabel =
+      params.start === "3y" ? "近 3 年" :
+      params.start === "5y" ? "近 5 年" :
+      params.start === "full" ? "全部(2018起)" : "近 2 年";
+    detail.innerHTML = `<td colspan="17">
+      <div class="panel-title">寻优建议 · ${esc(code)} ${esc(name || "")}
+        <span class="panel-sub">区间 ${startLabel} · 资金 ¥${fmtNum(params.capital || 0, 0)} · 按年化排序</span>
+      </div>
+      <table>
+        <thead><tr><th data-metric="spacing">间距% ⓘ</th><th data-metric="levels">层数 ⓘ</th><th data-metric="shares">每格股数 ⓘ</th><th data-metric="grid_value">每格金额 ⓘ</th>
+          <th data-metric="position_range">持仓范围 ⓘ</th><th data-metric="annual">年化% ⓘ</th><th data-metric="benchmark">基准年化 ⓘ</th><th data-metric="excess">超额α ⓘ</th><th data-metric="total">总收益% ⓘ</th><th data-metric="max_dd">回撤% ⓘ</th><th data-metric="sharpe">Sharpe ⓘ</th></tr></thead>
+        <tbody><tr>
+          <td class="num"><b>${best.spacing}</b></td>
+          <td class="num"><b>${best.levels}</b></td>
+          <td class="num"><b>${best.shares}</b></td>
+          <td class="num">${fmtNum(best.grid_value, 0)}</td>
+          <td class="num">${pr.min ?? "—"}~${pr.max ?? "—"}</td>
+          <td class="num up">${fmtPct(best.annual_return_pct, 2)}</td>
+          <td class="num ${pctCls(best.buy_and_hold_annual_pct)}">${fmtPct(best.buy_and_hold_annual_pct, 2)}</td>
+          <td class="num ${pctCls(best.alpha_pct)}">${fmtPct(best.alpha_pct, 1, true)}</td>
+          <td class="num">${fmtPct(best.total_return_pct, 2)}</td>
+          <td class="num down">${fmtPct(best.max_dd_pct, 2)}</td>
+          <td class="num">${best.sharpe == null ? "—" : fmtNum(best.sharpe, 2)}</td>
+        </tr></tbody>
+      </table>
+      <div class="toolbar">
+        <button class="btn" data-screen-save>保存为网格配置</button>
+      </div>
+      ${best.beat_benchmark === false ? `<div class="dim" style="color:var(--warn);margin-top:8px">⚠ 该配置年化 ${fmtPct(best.annual_return_pct, 2)} 跑输买入持有基准 ${fmtPct(best.buy_and_hold_annual_pct, 2)}（超额 α ${fmtPct(best.alpha_pct, 1, true)}），保存前请确认</div>` : ""}
+      <div id="grid-screen-advise"></div>
+    </td>`;
+    detail.querySelector("[data-screen-save]").addEventListener("click", async () => {
+      if (best.beat_benchmark === false &&
+          !confirm(`该配置年化 ${fmtPct(best.annual_return_pct, 2)} 跑输买入持有基准 ${fmtPct(best.buy_and_hold_annual_pct, 2)}（超额 α ${fmtPct(best.alpha_pct, 1, true)}），确认仍要保存？`)) {
+        return;
+      }
+      const base = best.grid_config && best.grid_config.base_price;
+      const cfg = {
+        code,
+        name,
+        strategy_type: "网格交易",
+        base_price: base != null ? base : (best.grid_config && best.grid_config.base_price),
+        spacing_up_pct: best.spacing,
+        spacing_down_pct: best.spacing,
+        price_low: best.grid_config && best.grid_config.price_range && best.grid_config.price_range.min,
+        price_high: best.grid_config && best.grid_config.price_range && best.grid_config.price_range.max,
+        order_type_sell: "限价即时买一价卖出",
+        order_type_buy: "限价即时卖一价买入",
+        shares_per_grid: best.shares,
+        levels_above: best.levels,
+        levels_below: best.levels,
+        base_position: pr.min,
+        max_position: pr.max,
+        status: "active",
+      };
+      try {
+        await api("/api/grid/configs/update", {
+          method: "POST",
+          body: { configs: [cfg] },
+          timeoutMs: 30000,
+        });
+        toast(`已保存 ${code} 为网格配置`);
+        await renderGridConfigList();
+      } catch (err) {
+        toast("保存失败: " + err.message, true);
+      }
+    });
+    const cfgForAdvise = { code, name };
+    gridConfigAdvise(code, cfgForAdvise, (body.data.results || []).slice(0, 5), detail.querySelector("#grid-screen-advise"));
+  } catch (err) {
+    detail.innerHTML = `<td colspan="17"><div class="empty">寻优失败: ${esc(err.message)}</div></td>`;
+  }
+}
+
+function gridConfigNum(v) {
+  return v == null || v === "" ? "" : v;
+}
+
+function gridConfigRowHtml(c, i) {
+  return `
+  <tr data-config-index="${i}" title="${esc((c.issues || []).join("；"))}">
+    <td>${verifyBadge(c.status)}</td>
+    <td><input class="edit-input" data-cfg="code" value="${esc(c.code || "")}" size="7"></td>
+    <td><input class="edit-input" data-cfg="name" value="${esc(c.name || "")}" size="9"></td>
+    <td><input class="edit-input num" data-cfg="base_price" type="number" step="0.001" value="${gridConfigNum(c.base_price)}" size="6"></td>
+    <td><input class="edit-input num" data-cfg="spacing_up_pct" type="number" step="0.1" value="${gridConfigNum(c.spacing_up_pct)}" size="4"></td>
+    <td><input class="edit-input num" data-cfg="spacing_down_pct" type="number" step="0.1" value="${gridConfigNum(c.spacing_down_pct)}" size="4"></td>
+    <td><input class="edit-input num" data-cfg="price_low" type="number" step="0.001" value="${gridConfigNum(c.price_low)}" size="6"></td>
+    <td><input class="edit-input num" data-cfg="price_high" type="number" step="0.001" value="${gridConfigNum(c.price_high)}" size="6"></td>
+    <td><input class="edit-input" data-cfg="order_type_sell" value="${esc(c.order_type_sell || "")}" size="8"></td>
+    <td><input class="edit-input" data-cfg="order_type_buy" value="${esc(c.order_type_buy || "")}" size="8"></td>
+    <td><input class="edit-input num" data-cfg="shares_per_grid" type="number" step="100" value="${gridConfigNum(c.shares_per_grid)}" size="5"></td>
+    <td><input class="edit-input num" data-cfg="base_position" type="number" step="100" value="${gridConfigNum(c.base_position)}" size="6"></td>
+    <td><input class="edit-input num" data-cfg="max_position" type="number" step="100" value="${gridConfigNum(c.max_position)}" size="6"></td>
+    <td>
+      <button class="btn ghost" data-config-verify style="padding:4px 8px;font-size:12px">核实</button>
+      <button class="btn ghost" data-config-optimize style="padding:4px 8px;font-size:12px">参数寻优</button>
+    </td>
+  </tr>`;
+}
+
+function collectGridConfigRow(tr) {
+  const out = { strategy_type: "网格交易", status: "active" };
+  tr.querySelectorAll("[data-cfg]").forEach((input) => {
+    const key = input.dataset.cfg;
+    const raw = input.value.trim();
+    if (raw === "") {
+      out[key] = null;
+    } else if (input.type === "number") {
+      const n = Number(raw);
+      out[key] = Number.isFinite(n) ? n : raw;
+    } else {
+      out[key] = raw;
+    }
+  });
+  return out;
+}
+
+function renderGridConfigResult(configs) {
+  const box = $("#grid-config-parse-result");
+  if (!configs.length) {
+    box.innerHTML = '<div class="empty">未识别到网格配置</div>';
+    return;
+  }
+  box.innerHTML = `
+    <div class="advice-banner" id="grid-config-verify-hint"></div>
+    <div class="table-scroll" style="overflow-x:auto">
+    <table>
+      <thead><tr>
+        <th>核验</th><th>代码</th><th>名称</th><th>基准价</th>
+        <th>上间距%</th><th>下间距%</th><th>区间低</th><th>区间高</th>
+        <th>卖出委托</th><th>买入委托</th><th>每格份</th>
+        <th>下限份</th><th>上限份</th><th>操作</th>
+      </tr></thead>
+      <tbody>
+        ${configs.map((c, i) => gridConfigRowHtml(c, i)).join("")}
+      </tbody>
+    </table>
+    </div>
+    <div id="grid-config-optimize-result" style="margin-top:10px"></div>
+    <div class="toolbar">
+      <button class="btn" id="grid-config-verify-all">全部核实</button>
+      <button class="btn" id="grid-config-confirm">确认保存 ${configs.length} 条</button>
+      <button class="btn" id="grid-config-clear">清空</button>
+    </div>`;
+  updateGridConfigHint(configs);
+  $("#grid-config-verify-all").addEventListener("click", () => {
+    $$("#grid-config-parse-result tbody tr").forEach((tr) => {
+      tr.dataset.verified = "1";
+    });
+    updateGridConfigHint();
+    toast("已全部标记核实，可直接保存");
+  });
+  $("#grid-config-confirm").addEventListener("click", confirmGridConfigs);
+  $("#grid-config-clear").addEventListener("click", () => {
+    box.innerHTML = "";
+    $("#grid-config-note").textContent = "";
+    state.gridConfigImages = [];
+    $("#grid-config-files").value = "";
+  });
+  box.addEventListener("click", async (ev) => {
+    const verifyBtn = ev.target.closest("[data-config-verify]");
+    if (verifyBtn) {
+      const tr = verifyBtn.closest("tr");
+      tr.dataset.verified = "1";
+      verifyBtn.textContent = "✓已核实";
+      updateGridConfigHint();
+      return;
+    }
+    const optBtn = ev.target.closest("[data-config-optimize]");
+    if (optBtn) {
+      const tr = optBtn.closest("tr");
+      const cfg = collectGridConfigRow(tr);
+      if (!cfg.code) {
+        toast("请先填写证券代码再寻优", true);
+        return;
+      }
+      optBtn.disabled = true;
+      optBtn.textContent = "寻优中…";
+      try {
+        await runGridConfigOptimize(cfg.code, tr);
+      } finally {
+        optBtn.disabled = false;
+        optBtn.textContent = "参数寻优";
+      }
+    }
+  });
+}
+
+function updateGridConfigHint(configs) {
+  const hint = $("#grid-config-verify-hint");
+  if (!hint) return;
+  const rows = [...$$("#grid-config-parse-result tbody tr")];
+  const pending = rows.filter((tr) => tr.dataset.verified !== "1").length;
+  hint.innerHTML = pending
+    ? `<div class="a-t">ℹ ${pending} 条尚未逐条核实（可选；保存只拦截错误项，也可点「全部核实」）</div>`
+    : `<div class="a-t">✅ 全部已核实，可「参数寻优」或直接保存</div>`;
+}
+
+async function runGridConfigOptimize(code, tr) {
+  const box = $("#grid-config-optimize-result");
+  box.innerHTML = '<div class="dim">参数寻优中（回测约需 10-60 秒）…</div>';
+  // 拉取网格总览：当前价 + 数据库已存配置，用于补全空字段
+  let overviewItem = {};
+  try {
+    const overview = await api("/api/grid", { quiet: true });
+    overviewItem =
+      (overview.data.items || []).find((i) => i.code === code) || {};
+  } catch (err) {
+    /* 拿不到总览时只填空间距/股数 */
+  }
+  const currentPrice = overviewItem.current_price;
+  const dbCfg = overviewItem.config || {};
+  const fillIfEmpty = (row, key, value) => {
+    const el = row.querySelector(`[data-cfg="${key}"]`);
+    if (el && String(el.value).trim() === "") el.value = value;
+  };
+  const body = await api(`/api/grid/optimize?codes=${encodeURIComponent(code)}`, {
+    timeoutMs: 180000,
+  });
+  const results = (body.data.results || []).filter((r) => r.code === code);
+  const best = (body.data.best_per_code || {})[code];
+  const top = results.slice(0, 8);
+  if (!top.length) {
+    box.innerHTML = '<div class="empty">未返回寻优结果</div>';
+    return;
+  }
+  box.innerHTML = `
+    <div class="panel-title">参数寻优建议 · ${code} <span class="panel-sub">按年化收益排序，点「应用」填入上方该行</span></div>
+    <table>
+      <thead><tr><th data-metric="spacing">间距% ⓘ</th><th data-metric="levels">层数 ⓘ</th><th data-metric="shares">每格股数 ⓘ</th><th data-metric="grid_value">每格金额 ⓘ</th>
+        <th data-metric="annual">年化% ⓘ</th><th data-metric="benchmark">基准年化 ⓘ</th><th data-metric="excess">超额α ⓘ</th><th data-metric="total">总收益% ⓘ</th><th data-metric="max_dd">最大回撤% ⓘ</th><th data-metric="sharpe">Sharpe ⓘ</th><th data-metric="win_rate">胜率% ⓘ</th><th></th></tr></thead>
+      <tbody>
+        ${top.map((r) => `
+          <tr>
+            <td class="num">${r.spacing}</td>
+            <td class="num">${r.levels}</td>
+            <td class="num">${r.shares}</td>
+            <td class="num">${fmtNum(r.grid_value, 0)}</td>
+            <td class="num up">${fmtPct(r.annual_return_pct, 2)}</td>
+            <td class="num ${pctCls(r.buy_and_hold_annual_pct)}">${fmtPct(r.buy_and_hold_annual_pct, 2)}</td>
+            <td class="num ${pctCls(r.alpha_pct)}">${fmtPct(r.alpha_pct, 1, true)}</td>
+            <td class="num">${fmtPct(r.total_return_pct, 2)}</td>
+            <td class="num down">${fmtPct(r.max_dd_pct, 2)}</td>
+            <td class="num">${r.sharpe == null ? "—" : fmtNum(r.sharpe, 2)}</td>
+            <td class="num">${r.win_rate_pct == null ? "—" : fmtPct(r.win_rate_pct, 1)}</td>
+            <td><button class="btn ghost" data-config-apply="${r.spacing}|${r.levels}|${r.shares}" style="padding:4px 8px;font-size:12px">应用</button></td>
+          </tr>`).join("")}
+      </tbody>
+    </table>
+    ${best ? `<div class="dim">最优组合：间距 ${best.spacing}% / ${best.levels} 层 / ${best.shares} 股（每格≈¥${fmtNum(best.grid_value, 0)}），年化 ${fmtPct(best.annual_return_pct, 2)}，最大回撤 ${fmtPct(best.max_dd_pct, 2)}${best.beat_benchmark === false ? ' <span class="badge-warn">⚠跑输基准，谨慎采用</span>' : ""}</div>` : ""}`;
+  box.querySelectorAll("[data-config-apply]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const [spacing, levels, shares] = btn.dataset.configApply.split("|");
+      const spacingN = Number(spacing);
+      const levelsN = Number(levels);
+      // 只补空字段：OCR 已识别的内容优先保留
+      fillIfEmpty(tr, "base_price", currentPrice != null ? currentPrice : (dbCfg.base_price ?? ""));
+      fillIfEmpty(tr, "spacing_up_pct", spacing);
+      fillIfEmpty(tr, "spacing_down_pct", spacing);
+      fillIfEmpty(tr, "shares_per_grid", shares);
+      const baseVal = Number(tr.querySelector('[data-cfg="base_price"]').value);
+      if (baseVal > 0 && levelsN > 0) {
+        fillIfEmpty(
+          tr, "price_low",
+          (baseVal * Math.pow(1 - spacingN / 100, levelsN)).toFixed(3)
+        );
+        fillIfEmpty(
+          tr, "price_high",
+          (baseVal * Math.pow(1 + spacingN / 100, levelsN)).toFixed(3)
+        );
+      }
+      fillIfEmpty(tr, "order_type_sell", "限价即时买一价卖出");
+      fillIfEmpty(tr, "order_type_buy", "限价即时卖一价买入");
+      fillIfEmpty(tr, "base_position", dbCfg.base_position ?? "");
+      fillIfEmpty(tr, "max_position", dbCfg.max_position ?? "");
+      tr.dataset.verified = "1";
+      updateGridConfigHint();
+      toast(`已应用：间距 ${spacing}% / ${levels} 层 / ${shares} 股，空字段已按现价/DB配置补全，请核对后保存`);
+    });
+  });
+}
+
+async function confirmGridConfigs() {
+  const rows = [...$$("#grid-config-parse-result tbody tr")];
+  const configs = rows.map(collectGridConfigRow);
+  try {
+    const body = await api("/api/grid/configs/update", {
+      method: "POST",
+      body: { configs },
+      timeoutMs: 30000,
+    });
+    toast(`网格配置已保存 ${body.data.saved} 条`);
+    $("#grid-config-parse-result").innerHTML = "";
+    $("#grid-config-note").textContent = "";
+    state.gridConfigImages = [];
+    $("#grid-config-files").value = "";
+    await renderGrid(true);
+  } catch (err) {
+    toast("保存失败: " + err.message, true);
+  }
+}
+
 async function renderGridOptimize(force) {
   const codes = $("#grid-opt-codes").value.trim();
   const capital = ($("#grid-opt-capital").value || "100000").trim();
@@ -1126,19 +2119,24 @@ async function renderGridOptimize(force) {
   const results = data.results || [];
   const best = Object.values(data.best_per_code || {});
   const params = data.params || {};
+  const startLabel =
+    params.start === "3y" ? "近 3 年"
+    : params.start === "5y" ? "近 5 年"
+    : params.start === "full" ? "全部(2018起)"
+    : "近 2 年";
   $("#grid-opt-note").textContent =
     `${params.codes ? params.codes.length : 0} 个标的 × ` +
     `内置候选（间距 ${(params.spacings || []).join("/")}%、层数 ${(params.levels || []).join("/")}、` +
     `每格金额 ${(params.grid_values || []).join("/")} 元折算股数）= ${results.length} 组 · ` +
-    `资金 ${params.capital || "—"} · ${params.start || "2y"}`;
+    `资金 ¥${fmtNum(params.capital || 0, 0)} · 区间 ${startLabel}`;
 
   $("#grid-opt-best").innerHTML = best.length
     ? `
     <table>
       <thead><tr>
-        <th>代码</th><th>名称</th><th>最优间距</th><th>层数</th><th>每格股数</th>
-        <th>每格金额</th><th>基准价</th><th>价格区间</th><th>持仓区间</th>
-        <th>年化</th><th>总收益</th><th>MaxDD</th><th>Sharpe</th><th>胜率</th><th>等级</th>
+        <th>代码</th><th>名称</th><th data-metric="spacing">最优间距 ⓘ</th><th data-metric="levels">层数 ⓘ</th><th data-metric="shares">每格股数 ⓘ</th>
+        <th data-metric="grid_value">每格金额 ⓘ</th><th data-metric="base_price">基准价 ⓘ</th><th data-metric="price_range">价格区间 ⓘ</th><th data-metric="position_range">持仓区间 ⓘ</th>
+        <th data-metric="annual">年化 ⓘ</th><th data-metric="benchmark">基准年化 ⓘ</th><th data-metric="excess">超额α ⓘ</th><th data-metric="total">总收益 ⓘ</th><th data-metric="max_dd">MaxDD ⓘ</th><th data-metric="sharpe">Sharpe ⓘ</th><th data-metric="win_rate">胜率 ⓘ</th><th data-metric="grade">等级 ⓘ</th>
       </tr></thead>
       <tbody>
         ${best
@@ -1158,6 +2156,8 @@ async function renderGridOptimize(force) {
               <td class="num">${pr.min != null ? `${fmtNum3(pr.min)}~${fmtNum3(pr.max)}` : "—"}</td>
               <td class="num">${posr.min != null ? `${fmtNum(posr.min, 0)}~${fmtNum(posr.max, 0)}` : "—"}</td>
               <td class="num ${pctCls(r.annual_return_pct)}">${fmtPct(r.annual_return_pct, 2, true)}</td>
+              <td class="num ${pctCls(r.buy_and_hold_annual_pct)}">${fmtPct(r.buy_and_hold_annual_pct, 2, true)}</td>
+              <td class="num ${pctCls(r.alpha_pct)}">${fmtPct(r.alpha_pct, 1, true)}${r.beat_benchmark === false ? ' <span class="badge-warn">跑输基准</span>' : ""}</td>
               <td class="num ${pctCls(r.total_return_pct)}">${fmtPct(r.total_return_pct, 2, true)}</td>
               <td class="num down">${fmtPct(r.max_dd_pct, 2)}</td>
               <td class="num">${fmtNum(r.sharpe)}</td>
@@ -1178,9 +2178,9 @@ async function renderGridOptimize(force) {
     <div class="muted" style="margin-bottom:8px">共 ${results.length} 组，仅显示按年化前 100 组</div>
     <table>
       <thead><tr>
-        <th>代码</th><th>名称</th><th>间距%</th><th>层数</th><th>每格</th>
-        <th>基准价</th><th>价格区间</th><th>年化</th><th>总收益</th><th>MaxDD</th><th>Sharpe</th>
-        <th>胜率</th><th>买/卖</th><th>交易</th><th>等级</th>
+        <th>代码</th><th>名称</th><th data-metric="spacing">间距% ⓘ</th><th data-metric="levels">层数 ⓘ</th><th data-metric="shares">每格 ⓘ</th>
+        <th data-metric="base_price">基准价 ⓘ</th><th data-metric="price_range">价格区间 ⓘ</th><th data-metric="annual">年化 ⓘ</th><th data-metric="excess">超额α ⓘ</th><th data-metric="total">总收益 ⓘ</th><th data-metric="max_dd">MaxDD ⓘ</th><th data-metric="sharpe">Sharpe ⓘ</th>
+        <th data-metric="win_rate">胜率 ⓘ</th><th data-metric="buy_sell">买/卖 ⓘ</th><th data-metric="trades">交易 ⓘ</th><th data-metric="grade">等级 ⓘ</th>
       </tr></thead>
       <tbody>
         ${sorted
@@ -1197,6 +2197,7 @@ async function renderGridOptimize(force) {
               <td class="num">${gc3.base_price != null ? fmtNum3(gc3.base_price) : "—"}</td>
               <td class="num">${pr3.min != null ? `${fmtNum3(pr3.min)}~${fmtNum3(pr3.max)}` : "—"}</td>
               <td class="num ${pctCls(r.annual_return_pct)}">${fmtPct(r.annual_return_pct, 2, true)}</td>
+              <td class="num ${pctCls(r.alpha_pct)}">${fmtPct(r.alpha_pct, 1, true)}</td>
               <td class="num ${pctCls(r.total_return_pct)}">${fmtPct(r.total_return_pct, 2, true)}</td>
               <td class="num down">${fmtPct(r.max_dd_pct, 2)}</td>
               <td class="num">${fmtNum(r.sharpe)}</td>
@@ -1420,6 +2421,21 @@ async function renderBacktest(force) {
 
   renderEnumTable();
   renderTradesTable(bt.trades || []);
+  renderWalkForwardFromLatest();
+}
+
+async function renderWalkForwardFromLatest() {
+  const panel = $("#wf-panel");
+  if (!panel) return;
+  try {
+    const body = await api("/api/walk-forward/latest", { quiet: true });
+    const wf = body.data;
+    if (wf && (wf.candidates || []).length) {
+      renderWalkForward(wf);
+    }
+  } catch {
+    /* 未运行过或接口异常时保持面板隐藏 */
+  }
 }
 
 async function renderEnumTable() {
@@ -1440,8 +2456,8 @@ async function renderEnumTable() {
     ? `
     <table>
       <thead><tr>
-        <th>#</th><th>组合</th><th>年化</th><th>总收益</th>
-        <th>最大回撤</th><th>夏普</th><th>卡玛</th><th>胜率</th><th>交易</th>
+        <th>#</th><th>组合</th><th data-metric="annual">年化 ⓘ</th><th data-metric="total">总收益 ⓘ</th>
+        <th data-metric="max_dd">最大回撤 ⓘ</th><th data-metric="sharpe">夏普 ⓘ</th><th data-metric="calmar">卡玛 ⓘ</th><th data-metric="dsr">DSR ⓘ</th><th data-metric="win_rate">胜率 ⓘ</th><th data-metric="trades">交易 ⓘ</th>
       </tr></thead>
       <tbody>
         ${results
@@ -1454,6 +2470,7 @@ async function renderEnumTable() {
               <td class="num down">${fmtPct(r.dd, 1)}</td>
               <td class="num">${fmtNum(r.sharpe)}</td>
               <td class="num">${fmtNum(r.calmar)}</td>
+              <td class="num">${r.dsr != null ? r.dsr.toFixed(2) : "—"}</td>
               <td class="num">${fmtNum(r.wr, 1)}%</td>
               <td class="num">${r.trades}</td>
             </tr>`)
@@ -1461,6 +2478,134 @@ async function renderEnumTable() {
       </tbody>
     </table>`
     : '<div class="empty">暂无枚举数据</div>';
+}
+
+async function pollJob(jobId, onMessage) {
+  for (;;) {
+    const body = await api(`/api/job?id=${encodeURIComponent(jobId)}`, {
+      quiet: true,
+      timeoutMs: 30000,
+    });
+    const job = body.data || {};
+    if (onMessage && job.message) onMessage(job.message);
+    if (job.status === "done") return job.result;
+    if (job.status === "error") throw new Error(job.error || job.message || "任务失败");
+    await new Promise((resolve) => setTimeout(resolve, 3000));
+  }
+}
+
+async function recalcEnum() {
+  const btn = $("#enum-recalc");
+  const note = $("#enum-note");
+  if (!btn) return;
+  btn.disabled = true;
+  note.textContent = "后台枚举中（约数分钟），请稍候…";
+  try {
+    const body = await api(
+      "/api/enum/recalc?universe=veteran&min=3&max=5&momentum=25&top=30",
+      { quiet: true, timeoutMs: 30000 }
+    );
+    const jobId = (body.data || {}).job_id;
+    if (!jobId) throw new Error("服务未返回任务 ID");
+    await pollJob(jobId, (msg) => (note.textContent = msg));
+    // 任务完成即落盘 + 写 MySQL；这里清掉内存缓存，重新从 /api/enum 拉取归一化结果，
+    // 避免直接使用任务原始字段（annual_pct/…）导致表格空值。
+    state.enumData = null;
+    await renderEnumTable();
+    toast("枚举重算完成");
+  } catch (err) {
+    toast("枚举失败: " + err.message, true);
+  } finally {
+    btn.disabled = false;
+    note.textContent = "";
+  }
+}
+
+function renderWalkForward(wf) {
+  const panel = $("#wf-panel");
+  if (!panel) return;
+  panel.hidden = false;
+  const cands = wf.candidates || [];
+  const follow = wf.follow_strategy || {};
+  const folds = wf.folds || [];
+  panel.innerHTML = `
+    <div class="panel-title">样本外验证（Walk-Forward · ${wf.n_folds || 0} 折）</div>
+    <div class="muted" style="margin-bottom:8px">
+      跟随策略样本外 <b>${fmtPct(follow.oos_total_pct, 1, true)}</b>
+      vs 等权基准 ${fmtPct(follow.benchmark_total_pct, 1, true)}
+      · 超额 ${fmtPct(follow.excess_pct, 1, true)}
+      · Sharpe ${follow.oos_sharpe != null ? fmtNum(follow.oos_sharpe) : "—"}
+    </div>
+    ${cands.length ? `
+    <table>
+      <thead><tr>
+        <th>样本外#</th><th>组合</th><th data-metric="oos_total">样本外总收益 ⓘ</th>
+        <th data-metric="oos_annual">样本外年化 ⓘ</th><th data-metric="oos_sharpe">样本外Sharpe ⓘ</th><th data-metric="selected">被选中 ⓘ</th>
+      </tr></thead>
+      <tbody>${cands.map((c) => `
+        <tr>
+          <td class="dim">${c.oos_rank ?? "—"}</td>
+          <td class="num">${esc(c.label || c.combo)}</td>
+          <td class="num ${(c.oos_total_pct || 0) >= 0 ? "up" : "down"}">${fmtPct(c.oos_total_pct, 1, true)}</td>
+          <td class="num">${c.oos_annual_pct != null ? fmtPct(c.oos_annual_pct, 1, true) : "—"}</td>
+          <td class="num">${c.oos_sharpe != null ? fmtNum(c.oos_sharpe) : "—"}</td>
+          <td class="dim">${c.selected_count ?? 0}/${c.n_folds ?? 0}</td>
+        </tr>`).join("")}</tbody>
+    </table>` : '<div class="empty">无样本外数据</div>'}
+    <div class="muted" style="margin-top:8px">选参：${folds.map((f) => `${f.train}→${f.test}=${f.selected}`).join(" · ")}</div>
+  `;
+}
+
+async function recalcWalkForward() {
+  const btn = $("#walk-forward");
+  const note = $("#enum-note");
+  if (!btn) return;
+  btn.disabled = true;
+  note.textContent = "样本外验证运行中（较慢），请稍候…";
+  try {
+    const body = await api(
+      "/api/walk-forward?top=20&train-months=24&test-months=12&step-months=12&metric=sharpe",
+      { quiet: true, timeoutMs: 30000 }
+    );
+    const jobId = (body.data || {}).job_id;
+    if (!jobId) throw new Error("服务未返回任务 ID");
+    const result = await pollJob(jobId, (msg) => (note.textContent = msg));
+    renderWalkForward(result);
+    toast("样本外验证完成");
+  } catch (err) {
+    toast("样本外验证失败: " + err.message, true);
+  } finally {
+    btn.disabled = false;
+    note.textContent = "";
+  }
+}
+
+async function recalcScan() {
+  const btn = $("#sc-recalc");
+  const note = $("#sc-note");
+  if (!btn) return;
+  btn.disabled = true;
+  note.textContent = "全市场扫描运行中（约数分钟），请稍候…";
+  try {
+    const minSizeYi = parseFloat($("#sc-min-size") ? $("#sc-min-size").value : "") || 0;
+    const minTurnoverYi =
+      parseFloat($("#sc-min-turnover") ? $("#sc-min-turnover").value : "") || 0;
+    const body = await api(
+      `/api/etf-scan/recalc?top=640&min-days=500` +
+        `&min-size=${minSizeYi * 1e8}&min-turnover=${minTurnoverYi}`,
+      { quiet: true, timeoutMs: 30000 }
+    );
+    const jobId = (body.data || {}).job_id;
+    if (!jobId) throw new Error("服务未返回任务 ID");
+    await pollJob(jobId, (msg) => (note.textContent = msg));
+    await renderScreener(false);
+    toast("全市场扫描完成");
+  } catch (err) {
+    toast("扫描失败: " + err.message, true);
+  } finally {
+    btn.disabled = false;
+    note.textContent = "";
+  }
 }
 
 function renderTradesTable(trades) {
@@ -1490,6 +2635,160 @@ function renderTradesTable(trades) {
       </tbody>
     </table>`
     : '<div class="empty">暂无交易记录</div>';
+}
+
+async function renderPresetPoolState() {
+  const sub = $("#pp-sub");
+  const box = $("#pp-current");
+  if (!sub && !box) return;
+  try {
+    const body = await api("/api/preset-pool", { quiet: true });
+    const data = body.data || {};
+    const presets = data.presets || [];
+    const scanGen = data.scan && data.scan.generated_at;
+    if (sub) {
+      sub.textContent = presets.length
+        ? `${presets.length} 个预设池 · 全市场扫描 ${scanGen ? String(scanGen).slice(0, 10) : "—"}`
+        : "尚未保存预设池";
+    }
+    if (box) {
+      box.innerHTML = presets.length
+        ? `
+        <table>
+          <thead><tr><th>池名</th><th>描述</th><th>标的（名称 + 代码）</th><th>状态</th></tr></thead>
+          <tbody>
+            ${presets
+              .map(
+                (p) => `
+                <tr>
+                  <td>${esc(p.pool_key)}</td>
+                  <td class="dim">${esc(p.description || "")}</td>
+                  <td>${(p.codes || [])
+                    .map((c, i) => `${esc((p.names || [])[i] || c)}(${esc(c)})`)
+                    .join("、")}</td>
+                  <td class="dim">${p.enabled ? "启用" : "停用"}</td>
+                </tr>`
+              )
+              .join("")}
+          </tbody>
+        </table>`
+        : '<span class="muted">暂无预设池（先点「生成预设池」，预览后保存）</span>';
+    }
+  } catch {
+    /* 服务不可用时不打扰页面 */
+  }
+}
+
+function renderPresetCandidates(result) {
+  const box = $("#pp-candidates");
+  if (!box) return;
+  const cands = (result || {}).candidates || [];
+  if (!cands || !cands.length) {
+    box.innerHTML = '<div class="empty">未生成候选</div>';
+    return;
+  }
+  const maxScore = Math.max(...cands.map((c) => c.composite_score || 0));
+  box.innerHTML = `
+    <table>
+      <thead><tr>
+        <th>#</th><th>代码</th><th>名称</th><th>类别</th>
+        <th data-metric="composite">综合分 ⓘ</th><th>平均相关</th><th>四维分</th>
+        <th data-metric="annual_vol">年化波动 ⓘ</th><th data-metric="annual">年化收益 ⓘ</th><th data-metric="sharpe">Sharpe ⓘ</th><th data-metric="max_dd">MaxDD ⓘ</th>
+      </tr></thead>
+      <tbody>
+        ${cands
+          .map(
+            (c, i) => `
+              <tr>
+                <td class="dim">${i + 1}</td>
+                <td>${esc(c.code)}</td>
+                <td>${esc(c.name)}</td>
+                <td class="dim">${esc(c.category)}</td>
+                <td class="num ${c.composite_score === maxScore ? "up" : ""}">${fmtNum(c.composite_score, 1)}</td>
+                <td class="num ${c.avg_corr != null && c.avg_corr > 0.6 ? "warn" : ""}">${c.avg_corr != null ? c.avg_corr.toFixed(2) : "—"}${c.corr_override ? " ⚠" : ""}</td>
+                <td class="num">${c.screener_total != null ? c.screener_total + "/20" : "—"}</td>
+                <td class="num">${fmtPct((c.volatility || 0) * 100, 1)}</td>
+                <td class="num ${(c.annual_return || 0) >= 0 ? "up" : "down"}">${fmtPct((c.annual_return || 0) * 100, 1, true)}</td>
+                <td class="num">${fmtNum(c.sharpe_ratio)}</td>
+                <td class="num down">${fmtPct((c.max_drawdown || 0) * 100, 1)}</td>
+              </tr>`
+          )
+          .join("")}
+      </tbody>
+    </table>
+    <div class="toolbar" style="margin-top:8px">
+      <button class="btn ghost" id="pp-apply">保存为预设池</button>
+      <span class="muted">保存后写入 MySQL momentum_pools，枚举/回测/扫描自动使用该池</span>
+    </div>`;
+  const removedCorr = (result || {}).removed_corr || [];
+  const removedNoData = (result || {}).removed_no_data || [];
+  if (removedCorr.length || removedNoData.length) {
+    box.innerHTML += `
+      <div class="muted" style="margin-top:8px;font-size:12.5px">
+        ${removedCorr.length ? `<div>⚠ 相关性超限剔除：${removedCorr.map((d) => `${d.code} ${d.name}（与 ${d.with_code} 相关 ${d.max_corr}）`).join("；")}</div>` : ""}
+        ${removedNoData.length ? `<div>⚠ 无本地行情剔除：${removedNoData.map((d) => `${d.code} ${d.name}`).join("；")}（请先联网重新扫描全市场）</div>` : ""}
+      </div>`;
+  }
+  const applyBtn = $("#pp-apply");
+  if (applyBtn) applyBtn.addEventListener("click", applyPresetPool);
+}
+
+async function buildPresetPool() {
+  const btn = $("#pp-build");
+  const note = $("#pp-note");
+  if (!btn) return;
+  btn.disabled = true;
+  note.textContent = "正在从全市场评分生成候选…";
+  try {
+    const minBars = $("#pp-exclude-new") && $("#pp-exclude-new").checked ? 1000 : 0;
+    const minSizeYi = parseFloat($("#pp-min-size") ? $("#pp-min-size").value : "") || 0;
+    const minTurnoverYi = parseFloat($("#pp-min-turnover") ? $("#pp-min-turnover").value : "") || 0;
+    const body = await api(
+      `/api/preset-pool/build?target-size=10&min-bars=${minBars}` +
+        `&min-size=${minSizeYi * 1e8}&min-turnover=${minTurnoverYi * 1e8}`,
+      {
+      quiet: true,
+      timeoutMs: 30000,
+      }
+    );
+    const jobId = (body.data || {}).job_id;
+    if (!jobId) throw new Error("服务未返回任务 ID");
+    const result = await pollJob(jobId, (msg) => (note.textContent = msg));
+    renderPresetCandidates(result || {});
+    toast(`已生成 ${((result || {}).candidates || []).length} 只候选，可预览后保存`);
+  } catch (err) {
+    toast("生成失败: " + err.message, true);
+  } finally {
+    btn.disabled = false;
+    note.textContent = "";
+  }
+}
+
+async function applyPresetPool() {
+  const rows = [...$$("#pp-candidates tbody tr")];
+  const codes = rows
+    .map((tr) => (tr.cells[1] ? tr.cells[1].textContent.trim() : ""))
+    .filter(Boolean);
+  const poolKey = ($("#pp-key").value || "veteran").trim();
+  if (!codes.length) {
+    toast("没有可保存的候选", true);
+    return;
+  }
+  try {
+    const body = await api("/api/preset-pool/apply", {
+      method: "POST",
+      body: {
+        pool_key: poolKey,
+        codes,
+        description: `预设池 ${poolKey}（${codes.length} 只）`,
+      },
+      timeoutMs: 30000,
+    });
+    toast(`预设池 ${body.data.pool_key} 已保存到 MySQL（${codes.length} 只）`);
+    await renderPresetPoolState();
+  } catch (err) {
+    toast("保存失败: " + err.message, true);
+  }
 }
 
 /* ============================================================
@@ -1527,8 +2826,8 @@ async function renderScreener(force) {
     <table>
       <thead><tr>
         <th>#</th><th>代码</th><th>名称</th><th>类别</th><th>子类</th>
-        <th>年化</th><th>最大回撤</th><th>夏普</th><th>波动</th>
-        <th>信号胜率10d</th><th>信号胜率20d</th><th>综合评分</th>
+        <th data-metric="annual">年化 ⓘ</th><th data-metric="max_dd">最大回撤 ⓘ</th><th data-metric="sharpe">夏普 ⓘ</th><th data-metric="annual_vol">波动 ⓘ</th>
+        <th data-metric="signal_wr10">信号胜率10d ⓘ</th><th data-metric="signal_wr20">信号胜率20d ⓘ</th><th data-metric="composite">综合评分 ⓘ</th>
       </tr></thead>
       <tbody>
         ${filtered
@@ -1566,6 +2865,7 @@ async function renderScreener(force) {
     $("#sc-recommend").innerHTML = `<div class="empty">四维选品不可用：${esc(err.message)}</div>`;
     $("#sc-corr").innerHTML = "";
   }
+  renderPresetPoolState();
 }
 
 function renderScreenerRecommend(sc) {
@@ -1575,7 +2875,7 @@ function renderScreenerRecommend(sc) {
     <table>
       <thead><tr>
         <th>代码</th><th>名称</th><th>类别</th><th>方向</th><th>流动</th>
-        <th>独立</th><th>波动</th><th>总分</th><th>CAGR</th><th>日均额</th>
+        <th>独立</th><th data-metric="annual_vol">波动 ⓘ</th><th data-metric="composite">总分 ⓘ</th><th data-metric="cagr">CAGR ⓘ</th><th data-metric="amount">日均额 ⓘ</th>
       </tr></thead>
       <tbody>
         ${rec
@@ -1710,7 +3010,7 @@ async function renderPositions() {
     <table>
       <thead><tr>
         <th>代码</th><th>名称</th><th>持仓</th><th>可用</th><th>现价</th>
-        <th>成本</th><th>市值</th><th>持仓盈亏</th><th>盈亏率</th>
+        <th>成本</th><th>底仓</th><th>市值</th><th>持仓盈亏</th><th>盈亏率</th>
         <th>当日盈亏</th><th>子账户</th><th>策略归属</th>
       </tr></thead>
       <tbody>
@@ -1725,6 +3025,7 @@ async function renderPositions() {
               <td class="num">${fmtNum(h.available, 0)}</td>
               <td class="num">${fmtNum3(h.price)}</td>
               <td class="num">${fmtNum3(h.cost)}</td>
+              <td class="num dim">${fmtNum(h.base_shares, 0)}</td>
               <td class="num">${fmtNum3(h.market_value)}</td>
               <td class="num ${pctCls(h.pnl)}">${fmtNum3(h.pnl)}</td>
               <td class="num ${pctCls(h.pnl_pct)}">${fmtPct(h.pnl_pct, 3, true)}</td>
@@ -1793,7 +3094,7 @@ async function loadModelProviders(selId) {
     const providers = modelsProviderCache;
     const targets = selId
       ? [selId]
-      : ["pos-provider", "grid-trigger-provider"];
+      : ["pos-provider", "grid-trigger-provider", "grid-config-provider"];
     const usable = providers.filter((p) => p.configured);
     const pool = usable.length ? usable : providers;
     for (const target of targets) {
@@ -1913,7 +3214,7 @@ function renderParseResult() {
             return `
             <tr data-code="${esc(h.code || "")}" title="${esc((h.issues || []).join("；") + (h.realtime_note ? "；" + h.realtime_note : ""))}">
               <td>${esc(h.code || "—")}</td>
-              <td>${esc(h.name || "—")}</td>
+              <td><input class="edit-input" data-edit="name" value="${esc(h.name || "")}" style="max-width:150px"></td>
               <td class="num">${editableRow ? editable("shares", h.shares, 1) : numCell(h.shares, 0)}</td>
               <td class="num">${editableRow ? editable("available", h.available, 1) : numCell(h.available, 0)}</td>
               <td class="num">${editableRow ? editable("price", h.price, 0.001) : numCell(h.price)}</td>
@@ -2005,6 +3306,10 @@ function renderParseResult() {
       const holding = (verified.holdings || []).find((h) => h.code === code);
       if (!holding) return;
       row.querySelectorAll("[data-edit]").forEach((input) => {
+        if (input.dataset.edit === "name") {
+          holding.name = input.value.trim();
+          return;
+        }
         const value = input.value === "" ? null : Number(input.value);
         holding[input.dataset.edit] = value !== null && Number.isFinite(value) ? value : null;
       });
@@ -2016,6 +3321,16 @@ function renderParseResult() {
       recomputeVerified(verified);
       renderParseResult();
       toast(`${holding.name || code} 已核实`);
+    });
+  });
+
+  // 名称修改：任何一行都能直接改识别出的名称，改动即时写回 holding（确认时一并保存）
+  $$("#pos-parse-holdings [data-edit='name']").forEach((input) => {
+    input.addEventListener("change", () => {
+      const row = input.closest("tr[data-code]");
+      const code = row && row.dataset.code;
+      const holding = (verified.holdings || []).find((h) => h.code === code);
+      if (holding) holding.name = input.value.trim();
     });
   });
 
@@ -2178,10 +3493,7 @@ async function renderDb() {
   const data = body.data;
   const tables = data.tables_detail || [];
   const dbInfo = data.db_info || {};
-  const dbLabel =
-    dbInfo.backend === "mysql"
-      ? `MySQL（${dbInfo.database || ""}@${dbInfo.host || ""}）`
-      : "SQLite";
+  const dbLabel = `MySQL（${dbInfo.database || ""}@${dbInfo.host || ""}）`;
   const dbDetail = dbInfo.db_path || (dbInfo.host ? `${dbInfo.host}:${dbInfo.port}` : "—");
   const cards = [
     ["数据库", dbLabel, dbDetail],
@@ -2376,7 +3688,7 @@ async function renderAudit(force) {
   }).join("");
   $("#au-ic").innerHTML = `
     <table>
-      <thead><tr><th>前向窗口</th><th>IC mean</th><th>IC std</th><th>IR</th><th>判定</th></tr></thead>
+      <thead><tr><th data-metric="forward_window">前向窗口 ⓘ</th><th data-metric="ic">IC mean ⓘ</th><th data-metric="ic">IC std ⓘ</th><th data-metric="ir">IR ⓘ</th><th>判定</th></tr></thead>
       <tbody>
         ${icRows}
         <tr>
@@ -2393,7 +3705,7 @@ async function renderAudit(force) {
   $("#au-stress").innerHTML = scenarios.length
     ? `
     <table>
-      <thead><tr><th>情景</th><th>期间</th><th>资产回撤</th><th>策略收益</th></tr></thead>
+      <thead><tr><th>情景</th><th>期间</th><th data-metric="asset_dd">资产回撤 ⓘ</th><th data-metric="strat_return">策略收益 ⓘ</th></tr></thead>
       <tbody>
         ${scenarios
           .map((s) => `
@@ -2810,6 +4122,11 @@ function bindEvents() {
     }
   });
 
+  $("#enum-recalc").addEventListener("click", recalcEnum);
+  $("#walk-forward").addEventListener("click", recalcWalkForward);
+  $("#sc-recalc").addEventListener("click", recalcScan);
+  $("#pp-build").addEventListener("click", buildPresetPool);
+
   $("#sc-run-screener").addEventListener("click", async () => {
     trace("action: 四维选品");
     try {
@@ -2898,6 +4215,22 @@ function bindEvents() {
   });
   $("#grid-trigger-add").addEventListener("click", addGridTrigger);
   $("#grid-upload-btn").addEventListener("click", () => $("#grid-trigger-files").click());
+  $("#grid-config-upload").addEventListener("click", () => $("#grid-config-files").click());
+  $("#grid-config-files").addEventListener("change", async (ev) => {
+    const files = [...(ev.target.files || [])];
+    if (!files.length) return;
+    try {
+      $("#grid-config-note").textContent = `已选择 ${files.length} 张图片，读取中…`;
+      state.gridConfigImages = await Promise.all(files.map(fileToBase64));
+      await parseGridConfigs();
+    } catch (err) {
+      toast("图片读取失败: " + err.message, true);
+      $("#grid-config-note").textContent = "";
+    }
+  });
+  $("#grid-config-parse").addEventListener("click", parseGridConfigs);
+  $("#grid-configs-reload").addEventListener("click", renderGridConfigList);
+  $("#grid-screener-run").addEventListener("click", renderGridScreener);
   $("#grid-trigger-files").addEventListener("change", async (ev) => {
     const files = [...(ev.target.files || [])];
     if (!files.length) return;
@@ -2987,6 +4320,7 @@ async function boot() {
   trace("boot start");
   $("#dataAsOf").textContent = "初始化中：连接服务…";
   bindEvents();
+  bindMetricHints();
   try {
     await ensurePools();
     trace("pools ok");

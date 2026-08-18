@@ -43,3 +43,5 @@ __pycache__/
 .ruff_cache
 .env
 momentum-dashboard/server-*.log
+reports/ETF/
+momentum-dashboard/schema_mysql.sql

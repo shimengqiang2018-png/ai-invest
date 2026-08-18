@@ -107,6 +107,18 @@ def _raw_rsrs(bars: tuple[dict, ...], index: int, period: int) -> tuple[float, f
     return raw_score, slope_annual_pct, r_squared
 
 
+def rsrs_factor(bars, index: int, period: int) -> tuple[float, float, float]:
+    """RSRS 因子分数：年化收益率 × R²。
+
+    实盘扫描器、回测排名与审计 IC/IR 必须共用这一口径，避免出现
+    「审计验证一个因子、实盘交易另一个因子」的隐性偏差。
+
+    Returns:
+        (raw_score, slope_annual_pct, r_squared)
+    """
+    return _raw_rsrs(tuple(bars), index, period)
+
+
 def _volume_ratio(bars: tuple[dict, ...], index: int) -> float | None:
     historical = [float(bar["volume"]) for bar in bars[index - 5:index]]
     current = float(bars[index]["volume"])

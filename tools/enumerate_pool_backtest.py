@@ -17,7 +17,8 @@ from datetime import datetime
 # 复用现有回测引擎
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from momentum_etf_backtest import run_backtest, ETF_POOL
+from momentum_etf_backtest import run_backtest, ETF_POOL, fetch_kline
+from multiple_testing import deflated_sharpe_ratio, return_stats, returns_from_nav
 
 # 候选 ETF - 全量池（排除银华日利 511880）
 CANDIDATE_CODES = [
@@ -27,7 +28,7 @@ CANDIDATE_CODES = [
     "510300",  # 沪深300ETF (2012~)
     "588000",  # 科创50ETF (2020~)
     "512880",  # 证券ETF (2016~)
-    "512690",  # 酒ETF (2014~)
+    "512690",  # 酒ETF (2019~)
     "512010",  # 医药ETF (2013~)
     "513180",  # 恒生科技ETF (2021~)
     "510500",  # 中证500ETF (2013~)
@@ -42,7 +43,6 @@ VETERAN_CODES = [
     "159915",  # 创业板ETF (2011)
     "510300",  # 沪深300ETF (2012)
     "512880",  # 证券ETF (2016)
-    "512690",  # 酒ETF (2014)
     "512010",  # 医药ETF (2013)
     "510500",  # 中证500ETF (2013)
     "159920",  # 恒生ETF (2012)
@@ -53,6 +53,27 @@ MOMENTUM_PERIODS = [20, 40]  # 短周期 + 中周期
 FREQ = "biweekly"
 
 
+def _common_effective_start(codes):
+    """所有候选 ETF 满足 252 日预热的最晚日期 → 统一回测起点。
+
+    各 ETF 上市时间不同（如证券 ETF 2016、纳指 2013），固定 start_date 会导致
+    不同组合的实际回测起点不同（窗口不一致），年化收益和 DSR 都不可跨组合比较。
+    统一起点让所有组合从同一日期开始。读不到数据时返回 None（调用方兜底）。
+    """
+    from momentum_etf_backtest import MomentumConfig, fetch_kline
+    warmup = MomentumConfig().warmup_days
+    starts = []
+    for code in codes:
+        try:
+            klines = fetch_kline(code, count=2000)
+            if not klines:
+                continue
+            starts.append(klines[warmup]["date"] if len(klines) > warmup else klines[0]["date"])
+        except Exception:
+            continue
+    return max(starts) if starts else None
+
+
 def main():
     parser = argparse.ArgumentParser(description="ETF池枚举回测")
     parser.add_argument("--min", type=int, default=3, help="最少 ETF 数量（默认3）")
@@ -61,19 +82,54 @@ def main():
     parser.add_argument("--momentum", default="20,40", help="动量周期（默认20,40）")
     parser.add_argument("--json", action="store_true", help="JSON输出")
     parser.add_argument("--universe", default="full", choices=["full", "veteran"],
-                        help="预设候选池名称 (full=全12只, veteran=精选10只)")
+                        help="预设候选池名称 (full=全12只, veteran=精选9只)")
     parser.add_argument("--pool", dest="universe", default=argparse.SUPPRESS,
                         help=argparse.SUPPRESS)  # 已弃用，用 --universe 代替
     parser.add_argument("--start", default=None, help="回测起始日期（默认自动适配）")
+    parser.add_argument("--codes", default=None,
+                        help="直接指定候选代码（逗号分隔，优先于 --universe；"
+                             "仪表盘会从 MySQL momentum_pools 传入）")
     parser.add_argument("--switch-buffer", type=float, default=1.0,
                         help="换仓迟滞系数（默认 1.0=无迟滞，如 1.25 表示挑战者需超持仓25%%才换仓）")
     args = parser.parse_args()
 
     momentums = [int(m.strip()) for m in args.momentum.split(",")]
 
-    # 选择候选池
-    codes = VETERAN_CODES if args.universe == "veteran" else CANDIDATE_CODES
-    start_date = args.start or ("2016-01-01" if args.universe == "veteran" else "2019-01-01")
+    # 选择候选池：优先 --codes（仪表盘从 MySQL 传入）；否则回退内置列表（已弃用）
+    if args.codes:
+        codes = [c.strip() for c in args.codes.split(",") if c.strip()]
+        if len(set(codes)) != len(codes):
+            raise SystemExit("--codes 包含重复代码")
+    else:
+        print("⚠️  未指定 --codes，使用内置默认池（已弃用：请从仪表盘/MySQL momentum_pools 传入）",
+              flush=True)
+        codes = VETERAN_CODES if args.universe == "veteran" else CANDIDATE_CODES
+
+    # 预取所有候选 ETF 行情一次（所有组合复用），剔除无行情数据的标的。
+    # 之前每个组合都重新拉取 3-5 只 ETF 的 K 线，336 组合的重复 IO 是枚举
+    # 耗时数小时的根因；同时避免缺失缓存时以 KeyError 崩溃。
+    market_data = {}
+    usable_codes = []
+    for code in codes:
+        try:
+            market_data[code] = fetch_kline(code, count=2000)
+            usable_codes.append(code)
+        except Exception as exc:
+            print(
+                f"  ⚠️ 剔除 {code}：无可用行情数据（{str(exc)[:80]}；"
+                "请先在仪表盘「重新扫描全市场」联网更新）",
+                flush=True,
+            )
+    if len(usable_codes) < args.min:
+        print(f"❌ 可用标的仅 {len(usable_codes)} 只，少于最小组合数 {args.min}，无法枚举")
+        return
+    codes = usable_codes
+
+    # 统一起点：所有 ETF 满足 252 日预热的最晚日期，保证各组合回测窗口一致
+    # （否则年化收益与 DSR 的 n_obs 都不可跨组合比较）。--start 显式指定时跳过。
+    start_date = args.start or _common_effective_start(codes) or (
+        "2016-01-01" if args.universe == "veteran" else "2019-01-01"
+    )
 
     # 枚举所有组合
     all_combos = []
@@ -98,7 +154,11 @@ def main():
     for combo in all_combos:
         pool = {c: ETF_POOL.get(c, c) for c in combo}
         combo_name = "+".join(combo)  # 如 "518880+513100+159915"
-        combo_label = "+".join(ETF_POOL.get(c, c) for c in combo)
+        # 组合标签带标的名称+代码，如 "纳100ETF(159696)+金ETF(159834)+芯片50(159560)"
+        combo_label = "+".join(
+            f"{name}({c})" if (name := ETF_POOL.get(c)) and name != c else c
+            for c in combo
+        )
 
         for mp in momentums:
             done += 1
@@ -112,6 +172,7 @@ def main():
                     freq=FREQ, momentum_period=mp,
                     include_bench=True, quiet=True,
                     switch_buffer=args.switch_buffer,
+                    market_data=market_data,
                 )
                 if r:
                     p = r["performance"]
@@ -134,6 +195,12 @@ def main():
                     risk_str = f"MaxDD{max_dd:.1f}%/{dd_days}d Vol{ann_vol:.1f}%"
                     ratio_str = f"Sharpe{sharpe:.2f} Sortino{sortino:.2f} Calmar{calmar:.2f}"
                     print(f"{ret_str} | {risk_str} | {ratio_str} | 胜率{wr:.0f}%")
+
+                    # 收益分布的偏度/峰度（DSR 多重比较校正需要）。
+                    # 用 ~biweekly 信号期收益（每 10 交易日降采样）而非日收益：
+                    # 日收益高度自相关，用日数做 n_obs 会把观测数从 ~150 虚增到 ~1500，
+                    # 从而高估 DSR 显著性。降采样后 sr/skew/kurt/n 同属信号期，数学自洽。
+                    ret_stats = return_stats(returns_from_nav((r.get("daily_nav") or [])[::10]))
 
                     results.append({
                         "combo": combo_name,
@@ -161,6 +228,11 @@ def main():
                         # 窗口
                         "window_start": period["start"],
                         "window_truncated": period.get("window_truncated", False),
+                        # DSR 输入（信号期 Sharpe / 偏度 / 原始峰度 / 观测数）
+                        "sr_period": round(ret_stats["sr"], 4) if ret_stats["sr"] is not None else None,
+                        "skew": round(ret_stats["skew"], 3) if ret_stats["skew"] is not None else None,
+                        "kurt": round(ret_stats["kurt"], 3) if ret_stats["kurt"] is not None else None,
+                        "n_obs": ret_stats["n"],
                     })
                 else:
                     print("❌ 数据不足")
@@ -174,9 +246,33 @@ def main():
     # 按年化收益排序
     results.sort(key=lambda r: r["annual_pct"], reverse=True)
 
+    # ── 多重比较校正：DSR（从 N 次回测里挑最好，运气成分有多大）──
+    n_trials = len(results)
+    for r in results:
+        if r.get("sr_period") is not None and r.get("n_obs", 0) >= 4:
+            dsr = deflated_sharpe_ratio(
+                r["sr_period"], n_trials,
+                r.get("skew") or 0.0, r.get("kurt") or 3.0, r["n_obs"],
+            )
+            r["dsr_prob"] = round(dsr["prob"], 3)
+        else:
+            r["dsr_prob"] = None
+
     # 输出
     if args.json:
-        print(json.dumps(results[:args.top], indent=2, ensure_ascii=False))
+        payload = {
+            "generated_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+            "total_combos": total,
+            "valid_results": len(results),
+            "config": (
+                f"C({len(codes)},{args.min}~{args.max}) {','.join(map(str, momentums))}日动量 "
+                f"biweekly 2019起 (RSRS v3.0 / MA20)"
+            ),
+            "results": results[:args.top],
+        }
+        print("__JSON_START__")
+        print(json.dumps(payload, ensure_ascii=False))
+        print("__JSON_END__")
         return
 
     # 检测窗口不一致
@@ -189,7 +285,7 @@ def main():
     print(f"{'='*110}")
     header = (f"  {'排名':<4s} {'组合':<30s} {'n':>2s} {'年化':>8s} {'总收益':>8s} "
               f"{'MaxDD':>7s} {'回撤天':>6s} {'Vol':>6s} "
-              f"{'Sharpe':>6s} {'Sortino':>7s} {'Calmar':>6s} {'胜率':>5s} {'交易':>4s} {'窗口':>8s}")
+              f"{'Sharpe':>6s} {'Sortino':>7s} {'Calmar':>6s} {'胜率':>5s} {'交易':>4s} {'窗口':>8s} {'DSR':>6s}")
     print(header)
     print("  " + "-" * (len(header) - 2))
 
@@ -204,12 +300,13 @@ def main():
         ca = f"{r['calmar']:.2f}"
         wr = f"{r['win_rate']:.0f}%"
         win = r['window_start'][:7] if r.get('window_start') else '?'
+        dsr = f"{r['dsr_prob']:.2f}" if r.get("dsr_prob") is not None else "—"
 
         flag = "✅" if r["excess_pct"] > 0 else "🔴"
         trunc = " ⚠️" if r.get("window_truncated") else ""
         print(f"  {rank:>3d}. {r['label']:<30s} {r['n_etf']:>2d} {ann:>8s} {tot:>8s} "
               f"{dd:>7s} {dd_days:>6s} {vol:>6s} "
-              f"{sh:>6s} {so:>7s} {ca:>6s} {wr:>5s} {r['num_trades']:>4d} {win:>8s}{trunc}")
+              f"{sh:>6s} {so:>7s} {ca:>6s} {wr:>5s} {r['num_trades']:>4d} {win:>8s}{trunc} {dsr:>6s}")
 
     # ── 统计摘要 ──
     top_n = min(20, len(results))
@@ -230,6 +327,14 @@ def main():
     print(f"  全样本 Sharpe 均值: {sum(all_sharpe)/len(all_sharpe):.2f}")
     print(f"  超额>0 比例: {sum(1 for r in results if r['excess_pct'] > 0)}/{len(results)} "
           f"({sum(1 for r in results if r['excess_pct'] > 0)/len(results)*100:.0f}%)")
+
+    # ── DSR 多重比较校正提示 ──
+    best_dsr = results[0].get("dsr_prob")
+    if best_dsr is not None:
+        print(f"  多重比较校正: 从 {len(results)} 次回测选最优，第一名 DSR 显著概率 = {best_dsr:.2f}")
+        if best_dsr < 0.95:
+            print(f"  ⚠️  第一名年化 {results[0]['annual_pct']:+.1f}% 未通过 DSR 校正（<0.95），"
+                  f"可能是 {len(results)} 次试验里的运气——建议跑 walk-forward 样本外验证")
 
     # ── 最佳组合详情 ──
     best = results[0]

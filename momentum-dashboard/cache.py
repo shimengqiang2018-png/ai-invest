@@ -20,9 +20,21 @@ from datetime import datetime
 
 
 _CONFIG_LOCK = threading.Lock()
-_PRODUCE_LOCK = threading.Lock()
 _backend_name = "db"
 _logger = None
+
+# 按 key 独立的生产锁：不同缓存 key 的重算互不阻塞，同 key 并发去重（double-check）
+_KEY_LOCKS: dict[str, threading.Lock] = {}
+_KEY_LOCKS_GUARD = threading.Lock()
+
+
+def _key_lock(key: str) -> threading.Lock:
+    with _KEY_LOCKS_GUARD:
+        lock = _KEY_LOCKS.get(key)
+        if lock is None:
+            lock = threading.Lock()
+            _KEY_LOCKS[key] = lock
+        return lock
 
 
 class _MemoryBackend:
@@ -88,9 +100,7 @@ _BACKENDS = {
 
 
 def configure(backend: str = "db") -> str:
-    """切换缓存后端（"db" 持久化 / "memory" 内存），兼容旧名 "sqlite"→"db"。"""
-    if backend == "sqlite":
-        backend = "db"
+    """切换缓存后端（"db" 持久化 / "memory" 内存）。"""
     if backend not in _BACKENDS:
         raise ValueError(f"未知缓存后端: {backend}（可选 {sorted(_BACKENDS)}）")
     with _CONFIG_LOCK:
@@ -162,8 +172,15 @@ def cached(key, ttl, refresh, producer):
     if refresh:
         _log(f"CACHE 强制重算 [{key}] (refresh=1)", "INFO")
     started = time.time()
-    try:
-        with _PRODUCE_LOCK:
+    with _key_lock(key):
+        if not refresh:
+            # double-check：等待期间其他线程可能已生成该 key
+            payload = get(key, ttl)
+            if payload is not None:
+                payload["cached"] = True
+                _log(f"CACHE 命中 [{key}]（等待期间已生成）", "INFO")
+                return payload, True, False
+        try:
             data = producer()
             payload = {
                 "ok": True,
@@ -173,16 +190,16 @@ def cached(key, ttl, refresh, producer):
                 "data": data,
             }
             set(key, payload)
-        _log(f"CACHE 重算完成 [{key}] ({time.time() - started:.1f}s)", "INFO")
-        return payload, False, False
-    except Exception as exc:
-        stale = get(key, ttl=None)  # 忽略 TTL 取旧缓存
-        if stale is not None:
-            stale["cached"] = True
-            stale["stale"] = True
-            stale["stale_error"] = str(exc)
-            _log(f"CACHE 重算失败，回退旧缓存 [{key}]: {exc}", "WARN")
-            return stale, True, True
-        _log(f"CACHE 重算失败且无缓存 [{key}]: {exc}", "ERROR")
-        # 保留原始异常类型（ValueError→400，RuntimeError→500）
-        raise
+            _log(f"CACHE 重算完成 [{key}] ({time.time() - started:.1f}s)", "INFO")
+            return payload, False, False
+        except Exception as exc:
+            stale = get(key, ttl=None)  # 忽略 TTL 取旧缓存
+            if stale is not None:
+                stale["cached"] = True
+                stale["stale"] = True
+                stale["stale_error"] = str(exc)
+                _log(f"CACHE 重算失败，回退旧缓存 [{key}]: {exc}", "WARN")
+                return stale, True, True
+            _log(f"CACHE 重算失败且无缓存 [{key}]: {exc}", "ERROR")
+            # 保留原始异常类型（ValueError→400，RuntimeError→500）
+            raise

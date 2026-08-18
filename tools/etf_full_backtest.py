@@ -344,6 +344,57 @@ def _print_table(results: list[dict], top_n: int = 30):
     print(f"{'─' * len(header)}")
 
 
+def _recent_avg_amount(bars: list[dict], window: int = 60) -> float:
+    """近 window 个交易日的日均成交额（亿元）。volume 单位为手（1手=100份）。"""
+    recent = bars[-window:]
+    if not recent:
+        return 0.0
+    amounts = [
+        float(b["volume"]) * 100 * float(b["close"]) / 1e8
+        for b in recent
+        if float(b.get("close") or 0) > 0 and float(b.get("volume") or 0) >= 0
+    ]
+    return sum(amounts) / len(amounts) if amounts else 0.0
+
+
+def _scan_one(etf, min_days, no_cache_fetch, verify_reference, existing_results,
+              min_turnover=0.0):
+    """扫描单只 ETF：取数 → 质量过滤 → 评估。供并行线程调用，线程安全。"""
+    code = etf["code"]
+    name = etf["name"]
+    if code in existing_results:
+        return "resume", existing_results[code]
+    if no_cache_fetch:
+        from pathlib import Path
+
+        cache_path = Path(CACHE_DIR) / f"etf_v2_sina_{code}_qfq_2000.json"
+        if not cache_path.exists():
+            return "skip", {"code": code, "name": name, "reason": "no_cache"}
+    series = load_etf_series(
+        code, count=2000, adjustment="qfq", cache_dir=CACHE_DIR,
+        verify_reference=verify_reference,
+    )
+    bars = list(series.bars)
+    if len(bars) < min_days:
+        return "skip", {"code": code, "name": name, "reason": f"too_few_bars({len(bars)})"}
+    avg_amount = _recent_avg_amount(bars)
+    if min_turnover > 0 and avg_amount < min_turnover:
+        return "skip", {
+            "code": code,
+            "name": name,
+            "reason": f"low_turnover({avg_amount:.2f}亿<{min_turnover:.0f}亿)",
+        }
+    result = _evaluate_etf(code, name, bars)
+    if result is None:
+        return "skip", {"code": code, "name": name, "reason": "insufficient_data"}
+    result["market"] = etf.get("market", "?")
+    result["category"] = etf.get("category", "?")
+    result["subcategory"] = etf.get("subcategory", "?")
+    result["fund_size"] = etf.get("fund_size")
+    result["avg_amount_yi"] = round(avg_amount, 2)
+    return "result", result
+
+
 def main():
     parser = argparse.ArgumentParser(description="全市场 ETF 动量回测扫描")
     parser.add_argument("--pool", help="逗号分隔的 ETF 代码列表（限定扫描范围）")
@@ -352,10 +403,19 @@ def main():
                         help=f"最少K线天数（默认 {MIN_LISTING_DAYS}）")
     parser.add_argument("--min-size", type=float, default=MIN_FUND_SIZE,
                         help=f"最小基金规模（元，默认 {MIN_FUND_SIZE:.0e} = 1亿）")
+    parser.add_argument("--min-turnover", type=float, default=0.0,
+                        help="近60日日均成交额下限（亿元，默认0=不限制；如 1 = ≥1亿/日）")
     parser.add_argument("--top", type=int, default=30, help="展示前 N 名（默认 30）")
     parser.add_argument("--resume", action="store_true", help="从已有结果断点续跑")
     parser.add_argument("--no-cache-fetch", action="store_true",
                         help="不拉取新K线数据，仅使用已有缓存")
+    parser.add_argument("--workers", type=int, default=4,
+                        help="并行抓取线程数（默认4，网络稳定可到8）")
+    parser.add_argument("--fast", action="store_true",
+                        help="快速模式：跳过腾讯交叉校验，只拉东财主源（扫描筛选够用）")
+    parser.add_argument("--source", default="auto",
+                        choices=["auto", "eastmoney", "tencent", "sina"],
+                        help="数据源优先级：auto=东财→腾讯→新浪；可指定主源（如 sina）加速")
     parser.add_argument("--output", default=OUTPUT_FILE, help=f"输出文件路径")
     args_raw = parser.parse_args()
 
@@ -366,6 +426,25 @@ def main():
 
     # 把 pool_set 挂到 args 上简化传递
     args_raw.pool = pool_set
+
+    # 并行抓取时放宽全局限流（默认1s/请求 → 0.3s），否则线程再多也串行；
+    # 快速模式同时启用快速失败（重试1次、超时8s），避免失败代码的重试风暴拖垮扫描。
+    if args_raw.workers > 1:
+        os.environ.setdefault("ETF_DATA_MIN_REQUEST_INTERVAL", "0.3")
+        print(f"⚡ 并行抓取: workers={args_raw.workers}（限流放宽到 0.3s/请求，含源级自适应冷却）")
+    if args_raw.fast:
+        os.environ.setdefault("ETF_DATA_TIMEOUT", "8")
+        os.environ.setdefault("ETF_DATA_RETRIES", "1")
+        os.environ.setdefault("ETF_DATA_RETRY_BASE_DELAY", "1")
+        print("⚡ 快速模式: 只拉东财主源 + 快速失败（单次失败即跳过，不重试风暴）")
+    if args_raw.source != "auto":
+        order = {
+            "eastmoney": "eastmoney,tencent,sina",
+            "tencent": "tencent,eastmoney,sina",
+            "sina": "sina,eastmoney,tencent",
+        }[args_raw.source]
+        os.environ["ETF_DATA_SOURCE_ORDER"] = order
+        print(f"📡 数据源优先级: {order}")
 
     print("=" * 60)
     print("全市场 ETF RSRS 动量信号扫描")
@@ -395,59 +474,47 @@ def main():
         except (json.JSONDecodeError, KeyError):
             pass
 
-    # ── 逐个扫描 ──
+    # ── 并行扫描 ──
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
     results = []
     skipped = []
     errors = []
     total = len(candidates)
     start_time = time.time()
-
-    for i, etf in enumerate(candidates):
-        code = etf["code"]
-        name = etf["name"]
-        cat = etf.get("category", "?")
-
-        # 断点续跑
-        if code in existing_results:
-            results.append(existing_results[code])
-            continue
-
-        progress = f"[{i + 1}/{total}]"
-        print(f"\r{progress} {code} {name[:20]:<20s} ...", end="", flush=True)
-
-        try:
-            # 获取 K 线数据
-            if args_raw.no_cache_fetch:
-                # 仅检查缓存
-                from pathlib import Path
-                cache_path = Path(CACHE_DIR) / f"etf_v2_sina_{code}_qfq_2000.json"
-                if not cache_path.exists():
-                    skipped.append({"code": code, "name": name, "reason": "no_cache"})
-                    continue
-
-            series = load_etf_series(code, count=2000, adjustment="qfq", cache_dir=CACHE_DIR)
-            bars = list(series.bars)
-
-            if len(bars) < args_raw.min_days:
-                skipped.append({"code": code, "name": name, "reason": f"too_few_bars({len(bars)})"})
-                continue
-
-            # 评估
-            result = _evaluate_etf(code, name, bars)
-            if result is None:
-                skipped.append({"code": code, "name": name, "reason": "insufficient_data"})
-                continue
-
-            # 补充元信息
-            result["market"] = etf.get("market", "?")
-            result["category"] = etf.get("category", "?")
-            result["subcategory"] = etf.get("subcategory", "?")
-            result["fund_size"] = etf.get("fund_size")
-
-            results.append(result)
-
-        except Exception as e:
-            errors.append({"code": code, "name": name, "error": str(e)[:100]})
+    done_count = 0
+    workers = max(1, args_raw.workers)
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        futures = {
+            pool.submit(
+                _scan_one,
+                etf,
+                args_raw.min_days,
+                args_raw.no_cache_fetch,
+                not args_raw.fast,
+                existing_results,
+                args_raw.min_turnover,
+            ): etf
+            for etf in candidates
+        }
+        for future in as_completed(futures):
+            etf = futures[future]
+            try:
+                kind, payload = future.result()
+            except Exception as exc:  # noqa: BLE001 - 单只失败不阻塞整体
+                kind, payload = "error", {
+                    "code": etf["code"],
+                    "name": etf["name"],
+                    "error": str(exc)[:100],
+                }
+            if kind in ("result", "resume"):
+                results.append(payload)
+            elif kind == "skip":
+                skipped.append(payload)
+            else:
+                errors.append(payload)
+            done_count += 1
+            print(f"[{done_count}/{total}] {etf['code']} {etf['name'][:20]}", flush=True)
 
     elapsed = time.time() - start_time
     print(f"\r{' ' * 60}")  # 清掉进度行
@@ -471,6 +538,7 @@ def main():
         "config": {
             "min_days": args_raw.min_days,
             "min_size": args_raw.min_size,
+            "min_turnover": args_raw.min_turnover,
             "momentum_period": DEFAULT_MOMENTUM_PERIOD,
             "weights": WEIGHTS,
         },

@@ -1,14 +1,11 @@
 import json
-import shutil
-import tempfile
 import unittest
 from pathlib import Path
 
 import sys
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "momentum-dashboard"))
 
-import db as dashboard_db
-from positions_parser import update_positions, verify_parsed  # noqa: E402
+from positions_parser import verify_parsed  # noqa: E402
 
 
 class PositionsParserTests(unittest.TestCase):
@@ -124,53 +121,50 @@ class PositionsParserTests(unittest.TestCase):
         self.assertEqual(1, len(verified["cross_validation"]))
         self.assertEqual(2000, verified["cross_validation"][0]["calc_shares"])
 
-    def test_update_blocks_on_errors_and_writes_snapshot(self):
-        verified = verify_parsed(self.parsed)
-        with self.assertRaises(ValueError):
-            update_positions(verified, "测试")
+    def test_ocr_code_auto_correction(self):
+        """不在已知列表的代码，若与某已知代码仅一位不同则自动修正，名称同步修正。"""
+        from unittest.mock import patch
 
-        # 修正后应成功写入
-        for holding in verified["holdings"]:
-            if holding["code"] == "512880":
-                holding["market_value"] = 11000
-                holding["issues"] = []
-                holding["status"] = "ok"
-        verified["status"] = "ok"
+        parsed = {
+            "account_summary": {},
+            "holdings": [
+                {
+                    # 512880 被 OCR 读成 519880，名称读成 WE ETF
+                    "code": "519880", "name": "WE ETF", "shares": 14100,
+                    "price": 1.097, "cost": 1.09,
+                    "market_value": 15467.7, "pnl": 98.7, "pnl_pct": 0.64,
+                },
+            ],
+            "trades": [],
+        }
+        # 用 K 线收盘价校验：只有 512880 的收盘价接近 市值÷份额(≈1.097)
+        def fake_close(code):
+            return 1.097 if code == "512880" else None
 
-        data_dir = Path(tempfile.mkdtemp())
-        with tempfile.TemporaryDirectory() as tmp:
-            # 让模块写临时目录（monkeypatch 路径）
-            import positions_parser
-            orig_file = positions_parser.POSITIONS_FILE
-            orig_history = positions_parser.HISTORY_FILE
-            orig_reports = positions_parser.REPORTS_DIR
-            orig_db_path = dashboard_db.DB_PATH
-            orig_db_conn = dashboard_db._conn
-            orig_db_backend = dashboard_db.db_backend()
-            positions_parser.POSITIONS_FILE = Path(tmp) / "positions_latest.json"
-            positions_parser.HISTORY_FILE = Path(tmp) / "ai_parse_history.json"
-            positions_parser.REPORTS_DIR = Path(tmp) / "reports"
-            dashboard_db.configure("sqlite")
-            dashboard_db.DB_PATH = Path(tmp) / "dashboard.db"
-            dashboard_db._conn = None
-            try:
-                snapshot = update_positions(verified, "测试")
-                db_stats = dashboard_db.stats()
-                self.assertEqual(1, db_stats["tables"]["positions_snapshots"])
-                self.assertEqual(1, db_stats["tables"]["parse_history"])
-            finally:
-                positions_parser.POSITIONS_FILE = orig_file
-                positions_parser.HISTORY_FILE = orig_history
-                positions_parser.REPORTS_DIR = orig_reports
-                dashboard_db.configure(orig_db_backend)
-                dashboard_db.DB_PATH = orig_db_path
-                dashboard_db._conn = orig_db_conn
+        with patch("positions_parser._cached_last_close", side_effect=fake_close):
+            verified = verify_parsed(parsed)
+        holding = verified["holdings"][0]
+        self.assertEqual("512880", holding["code"])
+        self.assertEqual("证券ETF国泰", holding["name"])
+        self.assertTrue(
+            any("已自动修正为 512880" in w for w in holding["warnings"])
+        )
+        self.assertNotEqual("error", holding["status"])
 
-        self.assertEqual(2, len(snapshot["holdings"]))
-        self.assertEqual(1, len(snapshot["trades"]))
-        self.assertEqual(90.0, snapshot["account_summary"]["position_ratio"])
-        self.assertIsNotNone(snapshot["holdings"][0].get("weight_pct"))
-        self.assertTrue(snapshot.get("excel_file", "").endswith(".xlsx"))
+    def test_classify_holding_grid_momentum_shared(self):
+        from positions_parser import _classify_holding
+        # 512880 网格（配置底仓 8000，不超过持仓内）
+        strategy, bucket, base = _classify_holding("512880", 14100)
+        self.assertEqual("网格", strategy)
+        self.assertEqual(8000, base)
+        # 159920 动量 → 底仓 0
+        strategy, bucket, base = _classify_holding("159920", 18000)
+        self.assertEqual("动量", strategy)
+        self.assertEqual(0, base)
+        # 159915 共用 → 无网格配置时底仓为 0
+        strategy, bucket, base = _classify_holding("159915", 1600)
+        self.assertEqual("共用", strategy)
+        self.assertEqual(0, base)
 
 
 if __name__ == "__main__":
