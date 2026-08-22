@@ -102,9 +102,6 @@ PRESET_POOLS = {
     "cifang2":   ("518880,162415,501225,159915,159985,161226,159941,513030,563230,161127,159852,512980,162719,513090,159582,162411,159995,160723,159667,512200", "次方2"),
 }
 
-# 货币ETF（持币用，但回测中直接算现金）
-CASH_PROXY = "CASH"
-
 class MarketBars(list):
     """兼容 list 调用方，同时保留行情 manifest。"""
 
@@ -127,64 +124,6 @@ def fetch_kline(
     if as_of is not None and series.manifest.end_date > as_of:
         series = truncate_series(series, as_of)
     return MarketBars(series.bars, series.manifest)
-
-
-# ==============================================================================
-# RSRS 动量计算（v2.0 核心改进: 年化斜率 × R² 替代简单涨幅）
-# ==============================================================================
-
-def calc_rsrs(klines: list[dict], idx: int, period: int = 20) -> tuple[float, float, float]:
-    """
-    RSRS 动量: 年化斜率 × R²（拟合优度）
-
-    对 klines[:idx+1] 近 period 日的 log(收盘价) 做加权线性回归:
-      - 权重: 近期更高（1 → 2 线性递增）
-      - 斜率: 年化处理 (×252)
-      - R²: 衡量价格沿趋势线的稳定程度
-
-    返回: (rsrs_score, slope_annual_pct, r_squared)
-    """
-    if idx < period: return (0, 0, 0)
-
-    window = klines[idx - period:idx + 1]
-    log_prices = [math.log(k["close"]) for k in window if k["close"] > 0]
-    if len(log_prices) < period // 2: return (0, 0, 0)
-
-    n = len(log_prices)
-    x = list(range(n))
-    # 线性递增权重: 1 → 2
-    weights = [1 + i / (n - 1) for i in range(n)] if n > 1 else [1] * n
-
-    wx = sum(w * xi for w, xi in zip(weights, x))
-    wy = sum(w * yi for w, yi in zip(weights, log_prices))
-    wxx = sum(w * xi * xi for w, xi in zip(weights, x))
-    wxy = sum(w * xi * yi for w, xi, yi in zip(weights, x, log_prices))
-    w_sum = sum(weights)
-    wyy = sum(w * yi * yi for w, yi in zip(weights, log_prices))
-
-    denominator = w_sum * wxx - wx * wx
-    if abs(denominator) < 1e-10: return (0, 0, 0)
-
-    slope = (w_sum * wxy - wx * wy) / denominator
-
-    # R²
-    y_mean = wy / w_sum
-    ss_total = wyy - 2 * y_mean * wy + w_sum * y_mean * y_mean
-    ss_error = 0
-    intercept = (wy - slope * wx) / w_sum
-    for xi, yi, wi in zip(x, log_prices, weights):
-        pred = slope * xi + intercept
-        ss_error += wi * (yi - pred) ** 2
-    r_squared = max(0, 1 - ss_error / ss_total) if ss_total > 1e-10 else 0
-
-    # 年化斜率（交易日 ×252）
-    slope_annual = slope * 252
-
-    # RSRS 得分 = 年化斜率 × R²（截断下限=0 防负分，上限 50 确保排名区分度）
-    # 审查修正: 原 cap=5 导致 91% 买入信号得分并列 5.0，排名退化为字典序
-    rsrs = max(0, min(50, slope_annual * r_squared * 100))
-
-    return (round(rsrs, 2), round(slope_annual * 100, 2), round(r_squared, 4))
 
 
 # ==============================================================================
@@ -248,6 +187,7 @@ def run_backtest(
         print(f"{'='*60}")
         print(f"  池子: {len(pool)} 只  |  频率: {freq}  |  RSRS周期: {momentum_period}日  |  起始: {start_date}")
         print(f"  规则: RSRS(年化斜率×R²)排名第一 + 收盘>MA{momentum_period} + 波动率不过热 + 量价过滤(放量2.5x/RSI>80剔除)")
+        print(f"  止损: 固定{STOP_LOSS_PCT*100:.0f}%")
 
     # ── 1. 获取所有ETF的K线数据 ──
     if not quiet:
@@ -347,6 +287,8 @@ def run_backtest(
             for d in sorted(in_range):
                 month_last[d[:7]] = d
             return sorted(month_last.values())
+        elif freq == "daily":
+            return sorted(in_range)
         else:
             return sorted(in_range)
 
@@ -491,16 +433,19 @@ def run_backtest(
             elif pos_code in last_close:
                 # 缺价: 沿用最近已知收盘价估值（不将持仓归零）
                 nav += position["shares"] * last_close[pos_code]
-            # 止损审计: 检查持仓收盘价是否触发 8% 止损线
+            # 止损审计: 检查持仓收盘价是否触发固定止损线
             if position and "entry_fill" in position:
-                if date in kline_index.get(position["code"], {}):
-                    idx = kline_index[position["code"]][date]
-                    c = all_klines[position["code"]][idx]["close"]
+                pos_code = position["code"]
+                if date in kline_index.get(pos_code, {}):
+                    idx = kline_index[pos_code][date]
+                    bar = all_klines[pos_code][idx]
+                    c = bar["close"]
                     stop_line = position["entry_fill"] * (1 - STOP_LOSS_PCT)
+                    stop_reason = f"止损（-{STOP_LOSS_PCT * 100:.0f}%）"
                     if c <= stop_line:
                         stop_loss_audits.append({
                             "date": date,
-                            "code": position["code"],
+                            "code": pos_code,
                             "entry_fill": position["entry_fill"],
                             "close": c,
                             "stop_line": round(stop_line, 4),
@@ -508,14 +453,12 @@ def run_backtest(
                         })
                         # 真正执行止损：次日开盘清仓（与实盘 check_stop_loss 口径一致）。
                         if pending_order is None:
-                            exec_date = _next_trading_day(date, [position["code"]])
+                            exec_date = _next_trading_day(date, [pos_code])
                             if exec_date is not None:
                                 pending_order = {
                                     "signal_date": date,
                                     "exec_date": exec_date,
-                                    "sell": {
-                                        "reason": f"止损（-{STOP_LOSS_PCT * 100:.0f}%）",
-                                    },
+                                    "sell": {"reason": stop_reason},
                                 }
                                 stop_loss_triggered_today = True
         daily_nav.append((date, round(nav, 2)))
@@ -672,7 +615,16 @@ def run_backtest(
         etf_bench_returns = {}
         bench_annual = 0.0
 
-    # ── 9. 汇总结果 ──
+    # ── 9. 交易级别统计（胜率/盈亏比）──
+    sells = [t for t in trades if "卖出" in t.get("action", "")]
+    win_trades = [t for t in sells if t.get("pnl", 0) > 0]
+    loss_trades = [t for t in sells if t.get("pnl", 0) <= 0]
+    trade_win_rate = len(win_trades) / len(sells) * 100 if sells else 0
+    avg_win_amt = sum(t["pnl"] for t in win_trades) / len(win_trades) if win_trades else 0
+    avg_loss_amt = sum(abs(t["pnl"]) for t in loss_trades) / len(loss_trades) if loss_trades else 0
+    profit_loss_ratio = avg_win_amt / avg_loss_amt if avg_loss_amt > 0 else 0
+
+    # ── 10. 汇总结果 ──
     result = {
         "strategy": {
             "name": "ETF动量轮动（RSRS v3.0）",
@@ -710,6 +662,11 @@ def run_backtest(
             "max_dd_days": max_dd_days,
             "downside_dev_pct": 0,  # 日频指标中由 daily.sortino 覆盖
             "daily": daily_metrics,
+            # 交易级别统计
+            "trade_win_rate_pct": round(trade_win_rate, 1),
+            "trade_win_count": len(win_trades),
+            "trade_sell_count": len(sells),
+            "profit_loss_ratio": round(profit_loss_ratio, 2),
         },
         "trades": trades,
         "nav_history": nav_history[::max(1, len(nav_history) // 50)],  # 抽样50个点用于绘图
@@ -831,8 +788,6 @@ def print_report(result: dict):
 
     perf = result["performance"]
     period = result["period"]
-    strat = result["strategy"]
-
     print(f"\n{'='*70}")
     print(f"  📊 回测报告")
     print(f"{'='*70}")
@@ -1025,11 +980,15 @@ def run_rolling_backtest(
     freq: str = "biweekly",
     momentum_period: int = 60,
     switch_buffer: float = 1.0,
+    start_date: str = None,
+    end_date: str = None,
 ) -> list[dict]:
     """滚动窗口回测。
 
     按 window_months 的窗口长度、step_months 的步长，在可用数据范围内滑动。
     每个窗口独立跑一次完整回测，返回所有窗口的结果列表。
+
+    start_date/end_date: 可选，限制滚动窗口的整体起止范围（YYYY-MM-DD）。
     """
     # 先获取数据，确定可用日期范围
     all_klines: dict[str, list[dict]] = {}
@@ -1041,10 +1000,26 @@ def run_rolling_backtest(
     common_start = max(k[0]["date"] for k in all_klines.values())
     common_end = min(k[-1]["date"] for k in all_klines.values())
 
+    # 用户指定的整体范围约束（与数据可用范围取交集）
+    range_start = start_date if start_date else common_start
+    range_end = end_date if end_date else common_end
+    if range_start < common_start:
+        print(f"  ⚠️ 指定起始 {range_start} 早于数据可用起点 {common_start}，以数据起点为准")
+        range_start = common_start
+    if range_end > common_end:
+        print(f"  ⚠️ 指定结束 {range_end} 晚于数据可用终点 {common_end}，以数据终点为准")
+        range_end = common_end
+
     # 需要预热期（start前至少252个交易日≈1年）
     warmup_needed = timedelta(days=365)
     earliest_possible = datetime.strptime(common_start, "%Y-%m-%d") + warmup_needed
     latest_possible = datetime.strptime(common_end, "%Y-%m-%d")
+
+    # 用户范围收窄窗口边界
+    if range_start > earliest_possible.strftime("%Y-%m-%d"):
+        earliest_possible = datetime.strptime(range_start, "%Y-%m-%d")
+    if range_end < latest_possible.strftime("%Y-%m-%d"):
+        latest_possible = datetime.strptime(range_end, "%Y-%m-%d")
 
     # 生成窗口
     windows = []
@@ -1069,6 +1044,8 @@ def run_rolling_backtest(
     print(f"  窗口长度: {window_months} 月  |  步长: {step_months} 月  |  共 {len(windows)} 个窗口")
     print(f"  频率: {freq}  |  动量周期: {momentum_period}日")
     print(f"  数据范围: {common_start} ~ {common_end}")
+    print(f"  窗口范围: {earliest_possible.strftime('%Y-%m-%d')} ~ {latest_possible.strftime('%Y-%m-%d')}"
+          + ("" if (start_date or end_date) else "（默认全范围）"))
 
     results = []
     for i, (ws, we) in enumerate(windows):
@@ -1309,8 +1286,8 @@ def main():
     parser.add_argument("--start", default="2013-01-01", help="回测起始日期（默认 2013-01-01）")
     parser.add_argument("--end", default=None, help="回测结束日期（默认今天）")
     parser.add_argument(
-        "--freq", default="biweekly", choices=["weekly", "biweekly", "monthly"],
-        help="信号检查频率（默认 biweekly）",
+        "--freq", default="biweekly", choices=["daily", "weekly", "biweekly", "monthly"],
+        help="信号检查频率（默认 biweekly）: daily=每日（模拟实盘14:30检测）",
     )
     parser.add_argument(
         "--momentum", type=int, default=25,
@@ -1403,6 +1380,8 @@ def main():
             freq=args.freq,
             momentum_period=args.momentum,
             switch_buffer=args.switch_buffer,
+            start_date=args.start if args.start != "2013-01-01" else None,
+            end_date=args.end,
         )
         if results:
             print_rolling_report(results)

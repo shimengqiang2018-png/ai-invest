@@ -203,6 +203,14 @@ def chat(
         "temperature": temperature,
         "max_tokens": max_tokens,
     }
+    # DeepSeek V4 等推理模型：结构化提取场景关闭思考可避免 reasoning 耗尽
+    # max_tokens 后返回空 content；按厂商配置透传 thinking / reasoning_effort。
+    thinking = spec.get("thinking")
+    if thinking in ("enabled", "disabled"):
+        payload["thinking"] = {"type": thinking}
+    reasoning_effort = spec.get("reasoning_effort")
+    if reasoning_effort in ("none", "low", "medium", "high", "max"):
+        payload["reasoning_effort"] = reasoning_effort
     return _openai_chat(spec, meta, payload)
 
 

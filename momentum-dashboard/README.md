@@ -189,6 +189,23 @@ echo "DEEPSEEK_API_KEY=sk-xxx" >> .env
 服务启动时自动加载 `.env`。`/api/models` 中 `deepseek configured=true` 后，
 持仓页解析模型选择 DeepSeek 即走「本地 OCR + 模型」通道。
 
+本地 OCR 依赖系统 `tesseract`（含 `chi_sim` 语言包）：
+
+```bash
+brew install tesseract tesseract-lang
+```
+
+若服务由 launchd watchdog（`com.momentum-dashboard.keepalive`）拉起，PATH 不包含
+`/usr/local/bin`，`positions_parser.py` 会依次尝试 `TESSERACT_CMD` 环境变量、
+`PATH` 与常见 Homebrew 安装路径（`/usr/local/bin`、`/opt/homebrew/bin`），
+一般无需额外配置；如 tesseract 装在其它位置，可在 `.env` 中设置
+`TESSERACT_CMD=/绝对路径/tesseract`。
+
+`deepseek-v4-flash` 是推理模型，默认会先输出大段思维链，在杂乱 OCR 文本上可能
+把 `max_tokens` 全部耗在 reasoning 上导致返回空内容。`model_config.json` 中
+deepseek 已设 `"thinking": "disabled"`（结构化提取更快更省）；如需恢复思考，
+改为 `"enabled"` 即可。
+
 ## API
 
 全部为 `GET`，返回 `{ok, data, cached, server_time}`。
@@ -197,8 +214,9 @@ echo "DEEPSEEK_API_KEY=sk-xxx" >> .env
 |------|------|------|
 | `/api/pools` | — | 无 |
 | `/api/signals` | `pool=recommended\|full\|回测预设(best4 等)\|自定义代码`，`momentum=25`（RSRS 周期 5-120），`refresh=1` | 10 分钟 |
-| `/api/overview` | `refresh=1` | 15 分钟 |
+| `/api/overview` | `pool=best4\|recommended\|6位代码`（动量组合，默认 best4）、`switch_buffer=1.5`、`refresh=1` | 15 分钟 |
 | `/api/backtest` | `preset=best4`（或 `pool=信号池名/自定义代码`），`momentum=25`，`freq=biweekly`，`start=full\|1y\|3y\|5y\|日期`，`commission=0.00025`（费率），`min_commission=0\|5`（0=免5）；无效参数返回 400 | 2 小时 |
+| `/api/backtest/history` | `limit=10`（每页条数，默认 10）、`offset=0`；返回 `items/total/limit/offset`（参数+摘要+时间，不含完整 payload） | 无 |
 | `/api/audit` | `refresh=1` | 2 小时 |
 | `/api/screener` | `refresh=1` | 24 小时 |
 | `/api/positions` | — | 无 |
@@ -242,7 +260,17 @@ momentum-dashboard/
 ├── holdings_strategy.json  # 持仓策略归属配置（网格/动量双策略口径）
 ├── static/
 │   ├── index.html   # 单页仪表盘
-│   ├── app.js       # 页面逻辑 + Canvas 图表（零依赖）
+│   ├── js/          # 前端模块（ES Modules，按业务域拆分）
+│   │   ├── utils.js      # 通用工具（格式化 / DOM 选择器 / 文件读取）
+│   │   ├── core.js       # 全局状态、API 封装、页面切换
+│   │   ├── charts.js     # Canvas 图表（净值 / K 线）
+│   │   ├── overview.js   # 总览
+│   │   ├── signals.js    # 信号扫描 + 信号表格
+│   │   ├── grid.js       # 网格策略 / 配置 / 选品池
+│   │   ├── backtest.js   # 回测分析 + 选品池
+│   │   ├── positions.js  # 持仓 + 截图解析
+│   │   ├── audit.js      # 风险审计 + 数据存储
+│   │   └── main.js       # 入口：事件绑定 + 启动
 │   └── style.css    # 深色金融风格
 ```
 

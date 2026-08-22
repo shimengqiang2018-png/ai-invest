@@ -976,6 +976,41 @@ def latest_backtest_result(kind: str) -> dict | None:
         return None
 
 
+def list_backtest_results(
+    kind: str = "backtest", limit: int = 10, offset: int = 0
+) -> tuple[list[dict], int]:
+    """分页返回最近的回测/寻优结果（不含 payload）+ 总条数。"""
+    limit = max(1, min(int(limit), 200))
+    offset = max(0, int(offset))
+    total_row = _exec(
+        "SELECT COUNT(*) AS n FROM backtest_results WHERE kind = ?",
+        (kind,),
+    ).fetchone()
+    total = int(total_row["n"]) if total_row else 0
+    rows = _exec(
+        "SELECT params_key, params, summary, updated_at FROM backtest_results "
+        "WHERE kind = ? ORDER BY updated_at DESC, id DESC LIMIT ? OFFSET ?",
+        (kind, limit, offset),
+    ).fetchall()
+    items = []
+    for row in rows:
+        item = _row_to_json(dict(row))
+        try:
+            params = json.loads(item.get("params") or "{}")
+            summary = json.loads(item.get("summary") or "{}")
+        except (json.JSONDecodeError, TypeError):
+            continue
+        items.append(
+            {
+                "params_key": item.get("params_key"),
+                "params": params,
+                "summary": summary,
+                "updated_at": item.get("updated_at"),
+            }
+        )
+    return items, total
+
+
 def latest_grid_opt_result(code: str) -> dict | None:
     """返回该标的最新的网格寻优结果（kind='grid_opt'，含最优参数与时间）。"""
     rows = _exec(

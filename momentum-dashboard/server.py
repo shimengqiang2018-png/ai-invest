@@ -164,9 +164,11 @@ def api_pools(params=None):
 
 def api_signals(params):
     signal_svc._reload_momentum_pools_from_db()
-    pool = params.get("pool", ["recommended"])[0]
+    pool = params.get("pool", ["best4"])[0]
     refresh = params.get("refresh", ["0"])[0] == "1"
     momentum = int(params.get("momentum", ["25"])[0])
+    holding = (params.get("holding", [None])[0] or "").strip().upper() or None
+    switch_buffer = float((params.get("switch_buffer", ["1.5"])[0] or "1.5").strip())
     if not 5 <= momentum <= 120:
         raise ValueError("动量周期需在 5-120 之间")
     if pool in signal_svc.SIGNAL_POOLS:
@@ -178,11 +180,16 @@ def api_signals(params):
     else:
         raise ValueError(f"未知信号池: {pool}")
 
-    key = f"signals-v3|{momentum}|{codes}"
+    key = f"signals-v3|{momentum}|{codes}|h={holding or ''}|sb={switch_buffer}"
 
     def producer():
+        cli = ["momentum_signal.py", "--pool", codes, "--momentum", str(momentum),
+               "--switch-buffer", str(switch_buffer)]
+        if holding:
+            cli.extend(["--holding", holding])
+        cli.append("--json")
         stdout = run_script(
-            ["momentum_signal.py", "--pool", codes, "--momentum", str(momentum), "--json"],
+            cli,
             timeout=420,
             offline=not (refresh or ALLOW_ONLINE),
         )
@@ -200,7 +207,8 @@ def api_signals(params):
     _biz(
         "SIGNAL",
         f"pool={pool_label} momentum={momentum}日 status={data.get('status')} "
-        f"as_of={data.get('as_of')} items={len(items)}",
+        f"as_of={data.get('as_of')} items={len(items)} "
+        f"holding={holding or '-'} buffer={switch_buffer}",
     )
     for item in items:
         _biz(
@@ -222,23 +230,77 @@ def api_signals(params):
         _biz(
             "SIGNAL",
             f"  >> 轮动 action={rotation.get('action')} "
-            f"target={target.get('code') or ''} {target.get('name') or ''}",
+            f"target={target.get('code') or ''} {target.get('name') or ''} "
+            f"reason={rotation.get('reason') or ''}",
         )
     signal_svc.record_signal_history(pool, momentum, data)
     return payload
 
 
 def api_overview(params):
+    signal_svc._reload_momentum_pools_from_db()
     refresh = params.get("refresh", ["0"])[0] == "1"
-    key = "overview-v3|full"
+    pool = (params.get("pool", [""])[0] or "").strip()
+    switch_buffer = float((params.get("switch_buffer", ["1.0"])[0] or "1.0").strip())
+    pool_codes = ""
+    pool_label = ""
+    if pool in signal_svc.SIGNAL_POOLS:
+        pool_codes = ",".join(signal_svc.SIGNAL_POOLS[pool]["codes"])
+        pool_label = signal_svc.SIGNAL_POOLS[pool]["desc"]
+    elif CODE_RE.match(pool):
+        pool_codes = pool
+        pool_label = f"自定义池 {pool}"
+    if not pool_label:
+        pool_label = signal_svc.SIGNAL_POOLS.get("best4", {}).get("desc", "")
+    key = f"overview-v3|{pool_codes or 'full'}|sb={switch_buffer}"
 
     def producer():
+        cli = ["strategy_monitor.py", "--json"]
         stdout = run_script(
-            ["strategy_monitor.py", "--json"],
+            cli,
             timeout=600,
             offline=not (refresh or ALLOW_ONLINE),
         )
-        return parse_json_output(stdout)
+        report = parse_json_output(stdout)
+        if pool_codes:
+            # 组合池：动量段用所选池重扫（含迟滞），网格/审计沿用监测报告
+            mom_cli = [
+                "momentum_signal.py",
+                "--pool", pool_codes,
+                "--switch-buffer", str(switch_buffer),
+                "--json",
+            ]
+            mom = parse_json_output(
+                run_script(
+                    mom_cli,
+                    timeout=420,
+                    offline=not (refresh or ALLOW_ONLINE),
+                )
+            )
+            report["momentum"] = {
+                "status": mom.get("status"),
+                "as_of": mom.get("as_of"),
+                "items": mom.get("items") or [],
+                "errors": mom.get("errors") or [],
+                "selected": mom.get("selected"),
+                "pool_complete": mom.get("pool_complete"),
+                "confidence": None,
+            }
+            status = report["momentum"].get("status")
+            selected = report["momentum"].get("selected")
+            advice = report.get("advice") or {}
+            if status == "ok" and selected:
+                advice["momentum_action"] = (
+                    f"按信号换仓至 {selected.get('code')} {selected.get('name', '')}"
+                ).strip()
+            elif status == "no_signal":
+                advice["momentum_action"] = "持币或切换至 511880 银华日利"
+            else:
+                advice["momentum_action"] = None
+            report["advice"] = advice
+        report["pool_label"] = pool_label
+        report["pool"] = pool
+        return report
 
     payload, _, _ = cached(key, 900, refresh, producer)
     data = payload.get("data") or {}
@@ -246,7 +308,7 @@ def api_overview(params):
     selected = momentum.get("selected")
     _biz(
         "OVERVIEW",
-        f"动量 status={momentum.get('status')} as_of={momentum.get('as_of')} "
+        f"动量 pool={pool_label} status={momentum.get('status')} as_of={momentum.get('as_of')} "
         f"selected={selected and selected.get('code')} "
         f"pool_complete={momentum.get('pool_complete')}",
     )
@@ -287,10 +349,13 @@ def api_backtest(params):
     commission = float(params.get("commission", ["0.00025"])[0])
     min_commission = float(params.get("min_commission", ["0"])[0])
     refresh = params.get("refresh", ["0"])[0] == "1"
+    switch_buffer = float((params.get("switch_buffer", ["1.0"])[0] or "1.0").strip())
     if not 5 <= momentum <= 120:
         raise ValueError("动量周期需在 5-120 之间")
-    if freq not in {"weekly", "biweekly", "monthly"}:
-        raise ValueError("freq 需为 weekly/biweekly/monthly")
+    if freq not in {"daily", "weekly", "biweekly", "monthly"}:
+        raise ValueError("freq 需为 daily/weekly/biweekly/monthly")
+    if switch_buffer < 1.0:
+        raise ValueError("switch_buffer 需 >= 1.0")
     resolved_start = _resolve_backtest_start(start_raw)
     if not 0 <= commission <= 0.01:
         raise ValueError("佣金费率需在 0-0.01 之间（如 0.00025=万2.5）")
@@ -319,7 +384,7 @@ def api_backtest(params):
     pool_spec = pool_codes or preset
     key = (
         f"backtest-v3|{pool_spec}|{momentum}|{freq}|{start_raw}"
-        f"|{commission}|{min_commission}"
+        f"|{commission}|{min_commission}|sb={switch_buffer}"
     )
 
     def producer():
@@ -334,6 +399,7 @@ def api_backtest(params):
             "--start", resolved_start,
             "--commission-rate", str(commission),
             "--min-commission", str(min_commission),
+            "--switch-buffer", str(switch_buffer),
             "--json",
         ]
         stdout = run_script(args, timeout=900, offline=not (refresh or ALLOW_ONLINE))
@@ -357,6 +423,7 @@ def api_backtest(params):
         data["start_raw"] = start_raw
         data["commission"] = commission
         data["min_commission"] = min_commission
+        data["switch_buffer"] = switch_buffer
         return data
 
     payload, from_cache, _ = cached(key, 7200, refresh, producer)
@@ -375,6 +442,7 @@ def api_backtest(params):
         f"excess={perf.get('excess_return_pct')}pp maxDD={perf.get('max_dd_pct')}% "
         f"sharpe={perf.get('sharpe')} sortino={perf.get('sortino')} "
         f"calmar={perf.get('calmar')} trades={perf.get('num_trades')} "
+        f"winRate={perf.get('trade_win_rate_pct')}% plRatio={perf.get('profit_loss_ratio')} "
         f"nav={perf.get('final_nav')}",
     )
     trades = data.get("trades") or []
@@ -394,6 +462,7 @@ def api_backtest(params):
                     "start": start_raw,
                     "commission": commission,
                     "min_commission": min_commission,
+                    "switch_buffer": switch_buffer,
                 },
                 {
                     "total_return_pct": perf.get("total_return_pct"),
@@ -404,6 +473,8 @@ def api_backtest(params):
                     "calmar": perf.get("calmar"),
                     "num_trades": perf.get("num_trades"),
                     "final_nav": perf.get("final_nav"),
+                    "trade_win_rate_pct": perf.get("trade_win_rate_pct"),
+                    "profit_loss_ratio": perf.get("profit_loss_ratio"),
                     "period_start": period.get("start"),
                     "period_end": period.get("end"),
                     "period_years": period.get("years"),
@@ -413,6 +484,21 @@ def api_backtest(params):
         except Exception as exc:  # noqa: BLE001 - 落库失败不影响主流程
             _log(f"DB 回测结果写入失败: {exc}", "WARN")
     return payload
+
+
+def api_backtest_history(params=None):
+    """回测历史列表（分页）：最近运行的 backtest 组合（不含完整 payload）。"""
+    params = params or {}
+    limit = int((params.get("limit") or ["10"])[0] or 10)
+    offset = int((params.get("offset") or ["0"])[0] or 0)
+    items, total = db.list_backtest_results("backtest", limit=limit, offset=offset)
+    return {
+        "ok": True,
+        "cached": False,
+        "stale": False,
+        "server_time": datetime.now().astimezone().isoformat(timespec="seconds"),
+        "data": {"items": items, "total": total, "limit": limit, "offset": offset},
+    }
 
 
 def api_audit(params):
@@ -1472,6 +1558,7 @@ ROUTES = {
     "/api/signals": api_signals,
     "/api/overview": api_overview,
     "/api/backtest": api_backtest,
+    "/api/backtest/history": api_backtest_history,
     "/api/audit": api_audit,
     "/api/screener": api_screener,
     "/api/positions": api_positions,

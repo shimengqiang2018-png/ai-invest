@@ -87,6 +87,35 @@ OCR_USER = (
 )
 
 
+def _resolve_tesseract_cmd() -> str:
+    """定位 tesseract 可执行文件：TESSERACT_CMD > PATH > 常见安装路径。
+
+    服务进程可能由 watchdog/launchd 后台启动，PATH 不含 /usr/local/bin，
+    此时 pytesseract 按 "tesseract" 查找会失败，必须显式兜底到常见路径。
+    """
+    candidates: list[str] = []
+    env_cmd = os.environ.get("TESSERACT_CMD", "").strip()
+    if env_cmd:
+        candidates.append(env_cmd)
+    which = shutil.which("tesseract")
+    if which:
+        candidates.append(which)
+    candidates.extend(
+        [
+            "/usr/local/bin/tesseract",  # Intel Homebrew
+            "/opt/homebrew/bin/tesseract",  # Apple Silicon Homebrew
+            "/usr/bin/tesseract",
+        ]
+    )
+    for candidate in candidates:
+        if candidate and os.path.isfile(candidate) and os.access(candidate, os.X_OK):
+            return candidate
+    raise RuntimeError(
+        "未找到 tesseract 可执行文件。请安装：brew install tesseract tesseract-lang"
+        "（或设置 TESSERACT_CMD 指定路径；也可改用支持视觉的模型厂商）"
+    )
+
+
 def ocr_images(images: list[dict]) -> str:
     """本地 tesseract OCR：放大2倍 + 增强对比度 + 锐化（对齐 fund-screenshot-ocr）。"""
     try:
@@ -96,6 +125,7 @@ def ocr_images(images: list[dict]) -> str:
         raise RuntimeError(
             f"本地 OCR 需要 pytesseract/PIL: {exc}（或改用支持视觉的模型厂商）"
         ) from exc
+    pytesseract.pytesseract.tesseract_cmd = _resolve_tesseract_cmd()
     blocks = []
     for index, image in enumerate(images, 1):
         try:

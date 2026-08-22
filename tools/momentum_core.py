@@ -21,6 +21,7 @@ class MomentumConfig:
     volume_limit_multiple: float = 2.5
     rsi_period: int = 14
     rsi_limit: float = 80.0
+    strong_score_min: float = 0.1  # strong 要求 RSRS >= 0.1，过滤趋势质量差的标的
 
 
 @dataclass(frozen=True)
@@ -188,7 +189,7 @@ def evaluate_momentum_signal(
     rsi_ok = rsi <= config.rsi_limit
     passed = formal and rsrs_ok and ma_ok and volatility_ok and volume_ok and rsi_ok
     golden_cross = bool(passed and ma60 is not None and current_close > ma_value > ma60)
-    strength = "strong" if golden_cross else "medium" if passed else "none"
+    strength = "strong" if golden_cross and raw_score >= config.strong_score_min else "medium" if passed else "none"
 
     metrics = {
         "formal": formal,
@@ -210,6 +211,7 @@ def evaluate_momentum_signal(
         "rsi": rsi,
         "rsi_ok": rsi_ok,
         "rsrs_ok": rsrs_ok,
+        "strong_score_min": config.strong_score_min,
         "display_rsrs_score": raw_score,
     }
     return SignalSnapshot(

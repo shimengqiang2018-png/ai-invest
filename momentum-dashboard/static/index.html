@@ -81,6 +81,7 @@
 
       <!-- 总览 -->
       <section class="tab active" id="tab-overview">
+        <div class="toolbar"><span class="muted" id="ov-pool-label"></span></div>
         <div class="cards" id="ov-cards"></div>
         <div class="grid-2">
           <div class="panel">
@@ -103,6 +104,7 @@
         <div class="toolbar">
           <label>信号池
             <select id="sig-pool">
+              <option value="best4" selected>最优 4-ETF（黄金+纳指+创业板+沪深300）</option>
               <option value="recommended">推荐 4-ETF（黄金+纳指+创业板+恒生）</option>
               <option value="full">全池 11 只</option>
             </select>
@@ -117,6 +119,17 @@
           </label>
           <label>自定义
             <input id="sig-custom" placeholder="如 518880,513100" size="18">
+          </label>
+          <label>当前持仓
+            <input id="sig-holding" placeholder="如 518880" size="8" style="text-transform:uppercase">
+          </label>
+          <label>换仓迟滞
+            <select id="sig-switch-buffer">
+              <option value="1.0">1.0（无迟滞）</option>
+              <option value="1.25">1.25（+25%）</option>
+              <option value="1.5" selected>1.5（+50%）</option>
+              <option value="2.0">2.0（+100%）</option>
+            </select>
           </label>
           <button class="btn" id="sig-run">扫描信号</button>
           <span class="muted" id="sig-note"></span>
@@ -311,16 +324,20 @@
           </label>
           <label>检查频率
             <select id="bt-freq">
+              <option value="daily">日频（模拟实盘）</option>
               <option value="weekly">周频</option>
-              <option value="biweekly" selected>双周</option>
-              <option value="monthly">月频</option>
+              <option value="biweekly">双周</option>
+              <option value="monthly" selected>月频</option>
             </select>
           </label>
           <label>回测区间
             <select id="bt-start">
               <option value="full">全部（2013 起）</option>
+              <option value="10y">近 10 年（2016 起）</option>
+              <option value="7y">近 7 年（2019 起）</option>
               <option value="5y">近 5 年</option>
               <option value="3y">近 3 年</option>
+              <option value="2y">近 2 年</option>
               <option value="1y">近 1 年</option>
             </select>
           </label>
@@ -339,8 +356,20 @@
               <option value="5">5 元</option>
             </select>
           </label>
+          <label>换仓迟滞
+            <select id="bt-switch-buffer">
+              <option value="1.0">1.0（无迟滞）</option>
+              <option value="1.25">1.25（+25%）</option>
+              <option value="1.5" selected>1.5（+50%）</option>
+              <option value="2.0">2.0（+100%）</option>
+            </select>
+          </label>
           <button class="btn" id="bt-run">运行回测</button>
           <span class="muted" id="bt-note"></span>
+        </div>
+        <div class="panel">
+          <div class="panel-title">历史回测 <span class="panel-sub">点「设为默认」选中组合（首页 / 信号扫描联动）</span></div>
+          <div id="bt-history" class="table-wrap"><div class="empty">加载中…</div></div>
         </div>
         <div class="cards" id="bt-cards"></div>
         <div class="panel">
@@ -564,6 +593,6 @@
     <div class="spinner"></div>
     <div id="loading-text">加载中…</div>
   </div>
-  <script src="/static/app.js?v=44"></script>
+  <script type="module" src="/static/js/main.js?v=1"></script>
 </body>
 </html>

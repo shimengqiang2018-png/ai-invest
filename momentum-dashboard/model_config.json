@@ -5,7 +5,8 @@
       "type": "openai",
       "base_url": "https://api.deepseek.com",
       "api_key_env": "DEEPSEEK_API_KEY",
-      "model": "deepseek-chat",
+      "model": "deepseek-v4-flash",
+      "thinking": "disabled",
       "vision": false,
       "temperature": 0.1,
       "max_tokens": 4000

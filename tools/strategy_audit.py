@@ -9,7 +9,6 @@ RSRS 动量策略 — 量化审计补充工具
 """
 import json, math, os, sys, time
 from datetime import datetime, timedelta
-from collections import defaultdict
 
 try:
     from tools.momentum_etf_backtest import run_backtest

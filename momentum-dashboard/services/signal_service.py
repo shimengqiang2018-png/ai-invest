@@ -103,7 +103,7 @@ def _reload_momentum_pools_from_db(force: bool = False) -> bool:
 
 def cache_signals_from_monitor(momentum: dict) -> None:
     """把策略监测里的动量信号写入信号页缓存，页面立即展示最新数据。"""
-    codes = ",".join(SIGNAL_POOLS["recommended"]["codes"])
+    codes = ",".join(SIGNAL_POOLS["best4"]["codes"])
     key = f"signals-v3|25|{codes}"
     data = {
         "status": momentum.get("status"),
@@ -113,7 +113,7 @@ def cache_signals_from_monitor(momentum: dict) -> None:
         "selected": momentum.get("selected"),
         "rotation": momentum.get("rotation"),
         "pool_complete": momentum.get("pool_complete"),
-        "pool_label": SIGNAL_POOLS["recommended"]["desc"],
+        "pool_label": SIGNAL_POOLS["best4"]["desc"],
         "momentum_period": 25,
     }
     if momentum.get("intraday_prediction"):
@@ -172,7 +172,7 @@ def run_intraday_prediction() -> dict:
     now_cn = datetime.now(ZoneInfo("Asia/Shanghai"))
     if now_cn.weekday() >= 5:
         raise ValueError("非交易日（周末），跳过盘中预测")
-    codes = list(SIGNAL_POOLS["recommended"]["codes"])
+    codes = list(SIGNAL_POOLS["best4"]["codes"])
     pool = {code: _etf_display_name(code) for code in codes}
     today = now_cn.date().isoformat()
     quotes = fetch_realtime_quotes(codes)
@@ -239,8 +239,8 @@ def run_intraday_prediction() -> dict:
 
 
 def scheduled_job() -> None:
-    """定时任务：14:30 后用当天实时价做盘中信号预测（不重跑收盘、不发邮件）；
-    其余时段刷新信号 + 发送邮件（复用 monitor_alert）。"""
+    """定时任务：14:30 后用当天实时价做盘中信号预测 + 网格趋势 + 发送邮件；
+    其余时段跑 strategy_monitor 全量报告 + 发送邮件。"""
     from tools import monitor_alert as ma
     from zoneinfo import ZoneInfo
 
@@ -257,51 +257,81 @@ def scheduled_job() -> None:
         if hour_minute >= 14 * 60 + 30:
             envelope = run_intraday_prediction()
             selected = envelope.get("selected") or {}
-            if envelope.get("intraday_complete"):
+            is_complete = bool(envelope.get("intraday_complete"))
+
+            # 完整时才覆盖缓存 + 写历史；不完整时保留上一版缓存
+            if is_complete:
                 cache_signals_from_monitor(envelope)
-                record_signal_history("recommended", 25, envelope)
-                # 盘中预测也发送邮件（标注 provisional，未收盘）
-                try:
-                    codes = [
-                        item.get("code")
-                        for item in (envelope.get("items") or [])
-                        if item.get("code")
-                    ]
-                    prices = fetch_realtime_quotes(codes) if codes else {}
-                    report = {
-                        "momentum": envelope,
-                        "grid": [],
-                        "risk": None,
-                        "advice": {
-                            "momentum_action": (
-                                "盘中信号预测（14:30 后 · provisional，未收盘，"
-                                "收盘后以正式信号为准）"
-                            ),
-                            "grid_action": "",
-                        },
-                    }
-                    html = ma.format_email_body(report, prices)
-                    smtp = ma._load_env()
-                    ma.send_email(smtp, html)
-                    email_sent = True
-                except Exception as exc:  # noqa: BLE001 - 邮件失败不影响调度主流程
-                    _log(f"SCHED 盘中预测邮件发送失败: {exc}", "WARN")
-                _log(
-                    f"SCHED 盘中信号预测: as_of={envelope.get('as_of')} "
-                    f"selected={selected.get('code')} {selected.get('signal_strength')}"
-                )
+                record_signal_history("best4", 25, envelope)
             else:
-                # 行情部分失败：不覆盖前一个 tick 的完整缓存
                 _log(
                     f"SCHED 盘中预测不完整（{len(envelope.get('errors') or [])} 个问题），"
                     f"保留上一版信号缓存",
                     "WARN",
                 )
+
+            # 始终发送邮件（即使行情部分失败也要通知用户，标注不完整）
+            try:
+                from tools import strategy_monitor as sm
+
+                # 获取网格趋势分析（不跑 momentum/audit，避免重复计算）
+                grid_report = sm.build_monitor_report(
+                    include_momentum=False,
+                    include_grid=True,
+                    include_audit=False,
+                )
+                grid_data = grid_report.get("grid", [])
+                grid_groups = grid_report.get("grid_groups", {})
+                grid_action = sm._grid_action(grid_groups)
+
+                # 收集所有 ETF 代码（动量 + 网格）拉取实时行情
+                all_codes: set[str] = set()
+                for item in (envelope.get("items") or []):
+                    if item.get("code"):
+                        all_codes.add(item["code"])
+                for item in grid_data:
+                    code = item.get("code") or item.get("etf", "")
+                    if code and item.get("status") != "unknown":
+                        all_codes.add(code)
+                prices = fetch_realtime_quotes(list(all_codes)) if all_codes else {}
+
+                momentum_action = (
+                    "盘中信号预测（14:30 后 · provisional，未收盘，"
+                    "收盘后以正式信号为准）"
+                )
+                if not is_complete:
+                    error_count = len(envelope.get("errors") or [])
+                    momentum_action = (
+                        f"⚠️ 盘中预测不完整（{error_count} 个行情问题）· "
+                        + momentum_action
+                    )
+
+                report = {
+                    "momentum": envelope,
+                    "grid": grid_data,
+                    "grid_groups": grid_groups,
+                    "risk": None,
+                    "advice": {
+                        "momentum_action": momentum_action,
+                        "grid_action": grid_action or "",
+                    },
+                }
+                html = ma.format_email_body(report, prices)
+                smtp = ma._load_env()
+                ma.send_email(smtp, html)
+                email_sent = True
+            except Exception as exc:  # noqa: BLE001 - 邮件失败不影响调度主流程
+                _log(f"SCHED 盘中预测邮件发送失败: {exc}", "WARN")
+            _log(
+                f"SCHED 盘中信号预测: as_of={envelope.get('as_of')} "
+                f"selected={selected.get('code')} {selected.get('signal_strength')} "
+                f"complete={is_complete}"
+            )
             result = "ok"
             detail = {
                 "as_of": envelope.get("as_of"),
                 "intraday": True,
-                "complete": bool(envelope.get("intraday_complete")),
+                "complete": is_complete,
                 "errors": (envelope.get("errors") or [])[:5],
                 "selected": selected.get("code"),
             }
@@ -315,7 +345,7 @@ def scheduled_job() -> None:
         momentum = report.get("momentum") or {}
         if momentum.get("items"):
             cache_signals_from_monitor(momentum)
-            record_signal_history("recommended", 25, momentum)
+            record_signal_history("best4", 25, momentum)
         codes = [
             item.get("code")
             for item in (momentum.get("items") or [])
